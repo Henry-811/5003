@@ -1,0 +1,1002 @@
+---
+title: "5003_3.0"
+author: "W11_G07"
+date: "2025-09-20"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: cosmo
+    code_folding: hide
+---
+
+```{css, echo=FALSE}
+.justify {
+  text-align: justify;
+  text-justify: inter-word;
+}
+.fontsize {
+  font-size: 12px;
+}
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,   
+  warning = FALSE)
+```
+
+```{R}
+
+#---2. Data Description---
+path <- "./final_decoded.csv"  
+df <- read.csv(path,
+               header = TRUE,
+               fileEncoding = "UTF-8",
+               na.strings = c("", "NA"))
+#head(df)
+
+library(dplyr)
+library(tibble)
+library(knitr)
+
+n_rows <- nrow(df)
+n_cols <- ncol(df)
+
+is_num <- sapply(df, is.numeric)
+n_numeric    <- sum(is_num, na.rm = TRUE)
+n_non_numeric <- n_cols - n_numeric
+
+summary_tbl <- tibble::tibble(
+  Indicator = c(" rows", "columns", "Numeric variable", "Non-numeric variable"),
+  number = c(n_rows, n_cols, n_numeric, n_non_numeric)
+)
+
+library(dplyr)
+library(purrr)
+library(tibble)
+library(knitr)
+num_cols<- names(df)[sapply(df, is.numeric)]
+num_profile <- purrr::map_dfr(num_cols, function(cn) {
+  s <- df[[cn]]; n <- length(s)
+  non_na <- sum(!is.na(s)); miss <- sum(is.na(s))
+  miss_rate <- miss / n * 100
+  uniq <- dplyr::n_distinct(s, na.rm = TRUE)
+  zero_cnt  <- sum(s == 0, na.rm = TRUE)
+  zero_rate <- zero_cnt / n * 100
+  qs <- quantile(s, probs = c(0, 0.25, 0.5, 0.75, 1),
+                 na.rm = TRUE, names = FALSE, type = 7)
+
+  tibble::tibble(
+    `Indicator`          = cn,
+    `non-missing`        = non_na,
+    `Missing values`     = miss,
+    `Missing Rate%`      = round(miss_rate, 2),
+    `Unique value count` = uniq,
+    `zero value`         = zero_cnt,
+    `Zero-rate%`         = round(zero_rate, 2),
+    `mean`               = mean(s, na.rm = TRUE),
+    `Standard deviation` = sd(s, na.rm = TRUE),
+    `min` = qs[1], `P25` = qs[2], `median` = qs[3], `P75` = qs[4], `max` = qs[5]
+  )
+})
+num_profile <- num_profile %>%
+  mutate(
+    across(
+      all_of(c("mean", "Standard deviation", "min", "P25", "median", "P75", "max")),
+      ~ round(.x, 4)
+    )
+  ) %>%
+  arrange(desc(`Missing Rate%`), `Indicator`)
+
+num_profile_table <- kable(num_profile, align = "lrrrrrrrrrrrrr")
+
+
+cat_cols <- names(df)[!sapply(df, is.numeric)]
+topk <- 3
+cat_profile <- map_dfr(cat_cols, function(cn) {
+  s <- df[[cn]]
+  n <- length(s)
+  non_na <- sum(!is.na(s))
+  miss   <- sum(is.na(s))
+  miss_rate <- miss / n * 100
+  uniq <- dplyr::n_distinct(s, na.rm = TRUE)
+  
+  vc <- sort(table(as.character(s[!is.na(s)]), useNA = "no"), decreasing = TRUE)
+  k  <- min(topk, length(vc))
+  top_vals  <- if (k > 0) names(vc)[seq_len(k)] else character(0)
+  top_freqs <- if (k > 0) as.integer(vc[seq_len(k)]) else integer(0)
+  
+   if (length(top_vals) < topk)  top_vals  <- c(top_vals,  rep(NA_character_, topk - length(top_vals)))
+  if (length(top_freqs) < topk) top_freqs <- c(top_freqs, rep(NA_integer_,  topk - length(top_freqs)))
+
+  tibble(
+    variable         = cn,
+    non_missing      = non_na,
+    missing          = miss,
+    missing_rate_pct = round(miss_rate, 2),
+    unique_count     = uniq,
+    top1_value       = top_vals[1],
+    top1_count       = top_freqs[1],
+    top1_pct         = round(top_freqs[1] * 100 / n, 2),
+    top2_value       = top_vals[2],
+    top2_count       = top_freqs[2],
+    top2_pct         = round(top_freqs[2] * 100 / n, 2),
+    top3_value       = top_vals[3],
+    top3_count       = top_freqs[3],
+    top3_pct         = round(top_freqs[3] * 100 / n, 2)
+  )
+})
+
+cat_profile <- cat_profile %>% arrange(desc(missing_rate_pct), variable)
+
+cat_profile_table <- kable(cat_profile, align = "lrrrrlrrlrrlrr")
+
+# set Parameters
+threshold_mad      <- 7      # robust z threshold; 7 is conservative
+min_non_missing    <- 30     # skip columns with too few non-missing values
+show_only_ge1pct   <- TRUE   # report only columns with >= 1% outliers
+
+num_cols <- names(df)[sapply(df, is.numeric)]
+mad_raw <- function(x) mad(x, na.rm = TRUE, constant = 1)
+
+#---outlier---
+# Compute outlier rate per numeric column
+outlier_rate_tbl <- map_dfr(num_cols, function(cn) {
+  s <- df[[cn]]
+  s <- s[!is.na(s)]
+  n <- length(s)
+  if (n < min_non_missing) {
+    return(tibble(
+      variable = cn, non_missing = n,
+      outlier_count = NA_integer_, outlier_rate_pct = NA_real_,
+      median = NA_real_, mad = NA_real_
+    ))
+  }
+  med <- median(s, na.rm = TRUE)
+  m   <- mad_raw(s)
+  if (is.na(m) || m == 0) {
+    return(tibble(
+      variable = cn, non_missing = n,
+      outlier_count = NA_integer_, outlier_rate_pct = NA_real_,
+      median = med, mad = m
+    ))
+  }
+  rz  <- abs(s - med) / m
+  cnt <- sum(rz > threshold_mad, na.rm = TRUE)
+  tibble(
+    variable = cn,
+    non_missing = n,
+    outlier_count = cnt,
+    outlier_rate_pct = round(cnt * 100 / n, 3),
+    median = med,
+    mad = m
+  )
+})
+
+outlier_rate_tbl <- outlier_rate_tbl %>%
+  arrange(desc(outlier_rate_pct), variable)
+
+if (show_only_ge1pct) {
+  outlier_rate_tbl <- outlier_rate_tbl %>%
+    filter(!is.na(outlier_rate_pct), outlier_rate_pct >= 1)
+}
+result_outliers <- outlier_rate_tbl %>%
+  select(variable, outlier_rate_pct, outlier_count, non_missing)
+
+outliers_table <- kable(result_outliers, align = "lrrr",
+      col.names = c("variable", "outlier_rate_pct", "outlier_count", "non_missing"))
+
+#---High Cardinality---
+# Choose categorical columns
+cat_cols <- names(df)[sapply(df, function(x) is.character(x) || is.factor(x))]
+
+# Compute unique counts and rates
+n <- nrow(df)
+hi_card_tbl <- lapply(cat_cols, function(cn) {
+  s <- df[[cn]]
+  u <- dplyr::n_distinct(s, na.rm = TRUE)
+  tibble(
+    variable = cn,
+    n_unique = u,
+    unique_rate_pct = round(u * 100 / max(1, n), 2)
+  )
+}) |> bind_rows()
+
+# Filter by high-cardinality rule and sort
+hi_card_tbl <- hi_card_tbl |>
+  filter(n_unique > 100 | unique_rate_pct > 50) |>
+  arrange(desc(n_unique), desc(unique_rate_pct), variable)
+
+# Print as a table
+hi_card_table <- kable(hi_card_tbl, align = "lrr",
+      col.names = c("variable", "n_unique", "unique_rate_pct"))
+
+#---Zero flation---
+# Parameters
+threshold_pct <- 90  # zero-rate threshold (percentage)
+
+# Select numeric columns
+num_cols <- names(df)[sapply(df, is.numeric)]
+
+# Compute zero rate per numeric column
+zero_inflated_tbl <- map_dfr(num_cols, function(cn) {
+  s <- df[[cn]]
+  n_non_missing <- sum(!is.na(s))
+  if (n_non_missing == 0) {
+    return(tibble(variable = cn, zero_rate_pct = NA_real_))
+  }
+  zeros <- sum(s == 0, na.rm = TRUE)
+  tibble(
+    variable = cn,
+    zero_rate_pct = round(100 * zeros / n_non_missing, 2)
+  )
+}) %>%
+  filter(!is.na(zero_rate_pct), zero_rate_pct >= threshold_pct) %>%
+  arrange(desc(zero_rate_pct), variable)
+
+# Print as a table
+zero_inflated_table <- kable(zero_inflated_tbl, align = "lr",
+      col.names = c("variable", "zero_rate_pct"))
+
+#---Multicolinearlity---
+# Parameters
+corr_threshold <- 0.95   # |r| threshold
+
+# Select numeric columns
+num_cols <- names(df)[sapply(df, is.numeric)]
+
+# Compute correlation matrix
+if (length(num_cols) < 2) {
+  result_corr <- tibble(
+    var1 = character(0), var2 = character(0),
+    r = numeric(0), abs_r = numeric(0)
+  )
+} else {
+  cor_mat <- suppressWarnings(
+    cor(df[, num_cols, drop = FALSE], use = "pairwise.complete.obs", method = "pearson")
+  )
+  # Extract upper triangle pairs
+  idx <- which(upper.tri(cor_mat), arr.ind = TRUE)
+  result_corr <- tibble(
+    var1  = rownames(cor_mat)[idx[, 1]],
+    var2  = colnames(cor_mat)[idx[, 2]],
+    r     = cor_mat[idx],
+    abs_r = abs(cor_mat[idx])
+  ) %>%
+    filter(!is.na(r), abs_r >= corr_threshold) %>%
+    arrange(desc(abs_r), var1, var2)
+}
+
+# Print as a table
+corr_table <- kable(result_corr, align = "llrr",
+      col.names = c("var1", "var2", "r", "abs_r"))
+
+#---3.Data Cleaning---
+library(readr); library(dplyr); library(tidyr); library(stringr)
+library(janitor); library(ggplot2); library(scales); library(purrr)
+
+in_csv  <- "final_decoded.csv"
+out_csv <- "final_decoded_clean.csv"
+
+# Use a different variable name to avoid conflict with base R's df function
+df <- readr::read_csv(in_csv, show_col_types = FALSE) %>%
+  mutate(across(everything(), ~ ifelse(is.character(.x) &
+      stringr::str_trim(.x) %in% c("", "Missing", "missing", "N/A", "NA", "n/a"), NA, .x)))
+
+#message(sprintf("Initial dataset: %d rows × %d columns", nrow(df), ncol(df)))
+
+#--3.1 Missing Value---
+# Check and clean target variable
+if ("STOP_MAINMODE" %in% names(df)) {
+  target_missing <- sum(is.na(df$STOP_MAINMODE) | df$STOP_MAINMODE == "")
+  df <- df %>% filter(!is.na(STOP_MAINMODE) & STOP_MAINMODE != "")
+  
+  message(sprintf("Removed %d rows (%.1f%%) with missing STOP_MAINMODE", 
+                  target_missing, target_missing/nrow(df)*100))
+  message(sprintf("Remaining: %d samples with %d travel modes", 
+                  nrow(df), length(unique(df$STOP_MAINMODE))))
+} else {
+  warning("STOP_MAINMODE not found in dataset!")
+}
+
+#---Drop Missing value---
+# Ensure df is available and is a data frame
+if (!exists("df") || !is.data.frame(df)) {
+  stop("df is not properly loaded as a data frame")
+}
+
+miss_tbl <- df %>%
+  summarize(across(everything(), ~ mean(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "missing_rate") %>%
+  arrange(desc(missing_rate))
+
+missing_table <- ggplot(head(miss_tbl, 20),
+       aes(x = reorder(column, missing_rate), y = missing_rate)) +
+  geom_col() +
+  coord_flip() +
+  scale_y_continuous(labels = percent) +
+  labs(title = "Top 20 Variables by Missingness", x = NULL, y = "Missing rate")
+
+high_miss_cols <- miss_tbl %>% filter(missing_rate >= 0.5) %>% pull(column)
+if (length(high_miss_cols)) {
+  df <- df %>% select(-all_of(high_miss_cols))
+  message(sprintf("Dropped %d columns with >95%% missing", length(high_miss_cols)))
+}
+
+#--Vehicle and Trip imputation---
+# Vehicle variables - critical for mode choice prediction
+# Include ALL vehicle-related variables, not just those prefixed with "veh_"
+veh_related_patterns <- c("^veh_", "^STOP_VEH", "_VEH")
+veh_cols <- names(df)[Reduce(`|`, lapply(veh_related_patterns, 
+                             function(p) grepl(p, names(df), ignore.case = TRUE)))]
+veh_cat <- veh_cols[sapply(df[veh_cols], is.character)]
+veh_num <- veh_cols[sapply(df[veh_cols], is.numeric)]
+
+# Categorical: NA -> "No Vehicle" (meaningful for non-motorized trips)
+if (length(veh_cat)) {
+  df <- df %>% mutate(across(all_of(veh_cat), ~ ifelse(is.na(.x), "No Vehicle", .x)))
+}
+
+# Numeric: use 0 for no vehicle (more logical than median)
+for (cn in veh_num) {
+  if (grepl("VEHWALKTIME", cn)) {
+    # Walk time: use median of positive values
+    walk_times <- df[[cn]][!is.na(df[[cn]]) & df[[cn]] > 0]
+    median_walk <- if(length(walk_times) > 0) median(walk_times) else 0
+    df[[cn]] <- ifelse(is.na(df[[cn]]), median_walk, df[[cn]])
+  } else {
+    # Other vehicle metrics: 0 indicates no vehicle
+    df[[cn]] <- ifelse(is.na(df[[cn]]), 0, df[[cn]])
+  }
+  # Add imputation flag for model transparency
+  df[[paste0(cn, "_imputed")]] <- as.integer(is.na(df[[cn]]))
+}
+
+# Trip/Stop timing variables - important for temporal patterns
+time_vars <- c("TRIP_DURATION", "TRIP_DEPHR", "TRIP_DEPTIME",
+               "STOP_DURATION", "STOP_DEPHR", "STOP_DEPTIME")
+
+for (var in time_vars) {
+  if (var %in% names(df) && sum(is.na(df[[var]])) > 0) {
+    if (grepl("DURATION", var)) {
+      # Try to calculate from other time fields first
+      if (grepl("TRIP", var) && all(c("TRIP_TRAVTIME", "TRIP_WAITTIME") %in% names(df))) {
+        calc_duration <- df$TRIP_TRAVTIME + df$TRIP_WAITTIME
+        df[[var]] <- ifelse(is.na(df[[var]]) & !is.na(calc_duration), calc_duration, df[[var]])
+      }
+      # Use median for remaining NAs
+      if (sum(!is.na(df[[var]])) > 0) {
+        df[[var]] <- ifelse(is.na(df[[var]]), median(df[[var]], na.rm = TRUE), df[[var]])
+      }
+      
+    } else if (grepl("DEPHR|DEPTIME", var)) {
+      # Try reconstruction from arrival - duration
+      arr_var <- gsub("DEP", "ARR", var)
+      dur_var <- gsub("DEPHR|DEPTIME", "DURATION", var)
+      if (arr_var %in% names(df) && dur_var %in% names(df)) {
+        calc_dep <- if(grepl("HR", var)) df[[arr_var]] - df[[dur_var]]/60 else df[[arr_var]] - df[[dur_var]]
+        df[[var]] <- ifelse(is.na(df[[var]]) & !is.na(calc_dep), calc_dep, df[[var]])
+      }
+      # Use mode (peak hour patterns) for remaining NAs
+      if (sum(!is.na(df[[var]])) > 0) {
+        mode_val <- as.numeric(names(sort(table(round(df[[var]])), decreasing = TRUE)[1]))
+        df[[var]] <- ifelse(is.na(df[[var]]), mode_val, df[[var]])
+      }
+    }
+    # Add imputation flag
+    #df[[paste0(var, "_imputed")]] <- as.integer(is.na(df[[var]]))
+  }
+}
+
+# Other categorical Trip/Stop variables: mode imputation
+trip_stop_cat <- grep("^(TRIP_|STOP_)", names(df), value = TRUE)
+trip_stop_cat <- trip_stop_cat[sapply(df[trip_stop_cat], is.character)]
+trip_stop_cat <- setdiff(trip_stop_cat, "STOP_MAINMODE")  # Exclude target
+
+for (col in trip_stop_cat) {
+  if (sum(is.na(df[[col]])) > 0) {
+    non_na <- df[[col]][!is.na(df[[col]])]
+    if (length(non_na) > 0) {
+      mode_val <- names(sort(table(non_na), decreasing = TRUE))[1]
+      df[[col]] <- ifelse(is.na(df[[col]]), mode_val, df[[col]])
+    }
+  }
+}
+
+#message(sprintf("Imputed vehicle and timing variables; created %d imputation flags", 
+                #sum(grepl("_imputed$", names(df)))))
+
+#{r drop-rows-near-complete, message=FALSE, warning=FALSE}
+miss_updated <- colMeans(is.na(df))
+near_complete <- names(miss_updated)[miss_updated > 0 & miss_updated <= 0.001]
+if (length(near_complete)) {
+  n_before <- nrow(df)
+  df <- df %>% drop_na(all_of(near_complete))
+  message(sprintf("Dropped %d rows with missing values in near-complete columns", n_before - nrow(df)))
+}
+
+#{r check-remaining-missing, message=FALSE, warning=FALSE}
+remaining_missing <- colSums(is.na(df))
+remaining_missing <- remaining_missing[remaining_missing > 0]
+if (length(remaining_missing) > 0) {
+  missing_summary <- data.frame(
+    variable = names(remaining_missing),
+    missing_count = remaining_missing,
+    missing_pct = round(remaining_missing/nrow(df) * 100, 2)
+  )
+  #cat("Variables with remaining missing values:\n")
+  #print(head(missing_summary[order(missing_summary$missing_pct, decreasing = TRUE), ], 10))
+}
+
+# 3.2 {r negative&special-value-check, message=FALSE, warning=FALSE}
+numeric_cols <- names(df)[sapply(df, is.numeric)]
+no_negative_patterns <- c("AGE", "YEAR", "COUNT", "_NUM$", "^ID", "_ID$", "_NO$",
+                          "DIST", "DURATION", "TIME$", "TRAVTIME", "WEIGHT", "WGT")
+
+for (col in numeric_cols) {
+  if (any(df[[col]] < 0, na.rm = TRUE)) {
+    should_be_positive <- any(sapply(no_negative_patterns, 
+                                     function(p) grepl(p, col, ignore.case = TRUE)))
+    if (should_be_positive) {
+      neg_vals <- unique(df[[col]][df[[col]] < 0])
+      if (all(neg_vals %in% c(-1, -99, -999))) {
+        df[[col]] <- ifelse(df[[col]] %in% c(-1, -99, -999), NA, df[[col]])
+        message(sprintf("%s: Converted special codes to NA", col))
+      }
+    }
+  }
+}
+
+# Convert ambiguous numeric codes in character columns to NA
+char_cols <- names(df)[sapply(df, is.character)]
+for (col in char_cols) {
+  # Convert codes that appear to be special values to NA
+  df[[col]] <- ifelse(df[[col]] %in% c("998", "999", "997", "-1", "-99", "-999"), 
+                      NA_character_, 
+                      df[[col]])
+}
+
+# 3.3 {r mixed-type-sanitise, message=FALSE, warning=FALSE}
+parse_numeric_safe <- function(x){
+  if (!is.character(x)) return(x)
+  suppressWarnings(readr::parse_number(x))
+}
+
+# Vehicle numeric columns
+veh_cols <- names(df)[grepl("^veh_", names(df), ignore.case = TRUE)]
+num_patterns <- c("year","age","engine","seats")
+veh_num_like <- veh_cols[Reduce(`|`, lapply(num_patterns, 
+                                function(p) grepl(p, veh_cols, ignore.case = TRUE)))]
+if (length(veh_num_like)) {
+  df <- df %>% mutate(across(all_of(intersect(veh_num_like, names(df))), parse_numeric_safe))
+}
+
+# Other clearly numeric columns
+for (pattern in c("TIME", "DIST", "WEIGHT", "WGT", "SPEED")) {
+  cols <- grep(pattern, names(df), value = TRUE, ignore.case = TRUE)
+  cols <- cols[!grepl("ID|_NO$|^VEH", cols)]
+  for (col in cols) {
+    if (is.character(df[[col]])) df[[col]] <- parse_numeric_safe(df[[col]])
+  }
+}
+
+# 3.4 {r drop-duplicates, message=FALSE, warning=FALSE}
+# STOPID is the unique row identifier (one stop = one row)
+# PERSID and TRIPID are retained for grouping/hierarchical analysis
+
+# Remove only artificial index columns (if any)
+idx_cols <- grep("(^row_|^index$|unnamed)", names(df), ignore.case = TRUE, value = TRUE)
+if (length(idx_cols)) {
+  df <- df %>% select(-all_of(idx_cols))
+  message(sprintf("Removed %d artificial index columns", length(idx_cols)))
+}
+
+# Verify STOPID uniqueness
+if ("STOPID" %in% names(df)) {
+  n_unique_stops <- length(unique(df$STOPID))
+  if (n_unique_stops < nrow(df)) {
+    warning(sprintf("STOPID is not unique! %d unique values for %d rows", 
+                    n_unique_stops, nrow(df)))
+    # Find duplicate STOPIDs
+    dup_stops <- df %>% 
+      group_by(STOPID) %>% 
+      filter(n() > 1) %>%
+      arrange(STOPID)
+    message(sprintf("Found %d rows with duplicate STOPID", nrow(dup_stops)))
+  } else {
+    message("STOPID is unique (good)")
+  }
+}
+
+# Check for duplicate rows EXCLUDING STOPID
+# This finds rows that are identical except for their STOPID
+df_check <- df %>% select(-STOPID)
+n_complete_dup <- sum(duplicated(df_check))
+if (n_complete_dup > 0) {
+  message(sprintf("Found %d rows that are identical except for STOPID", n_complete_dup))
+  # These might be data entry errors or legitimate similar trips
+}
+
+# Remove exact duplicate rows (including STOPID)
+before_dedup <- nrow(df)
+df <- df %>% distinct()
+after_dedup <- nrow(df)
+if (before_dedup > after_dedup) {
+  message(sprintf("Removed %d exact duplicate rows", before_dedup - after_dedup))
+}
+
+
+# 3.5 {r outliers, message=FALSE, warning=FALSE}
+cap_iqr <- function(x){
+  if (!is.numeric(x)) return(x)
+  q <- quantile(x, c(0.25, 0.75), na.rm = TRUE)
+  iqr <- q[2] - q[1]
+  if (!is.finite(iqr) || iqr == 0) return(x)
+  x[x < q[1] - 1.5*iqr] <- q[1] - 1.5*iqr
+  x[x > q[2] + 1.5*iqr] <- q[2] + 1.5*iqr
+  x
+}
+
+num_cols <- names(df)[sapply(df, is.numeric)]
+skip_cols <- grep("(dist|time|duration|fare|cost|amount)", num_cols, ignore.case = TRUE, value = TRUE)
+cap_cols <- setdiff(num_cols, skip_cols)
+df <- df %>% mutate(across(all_of(cap_cols), cap_iqr))
+
+# {r save, message=FALSE, warning=FALSE}
+readr::write_csv(df, out_csv)
+#cat(sprintf("Final dataset: %d rows × %d columns\n", nrow(df), ncol(df))) 
+
+# 4.1 {r}
+
+df <- read.csv("./final_decoded_clean_v3.csv")
+
+library(readxl)
+library(dplyr)
+library(purrr)
+library(ggplot2)
+library(stringr)
+library(tibble)
+library(scales)
+library(dendextend)
+
+# find target
+nm_lower <- tolower(names(df))
+y_col <- names(df)[nm_lower == "stop_mainmode"]
+if (length(y_col) == 0) {
+
+  cand <- names(df)[str_detect(nm_lower, "stop") &
+                    str_detect(nm_lower, "main") &
+                    str_detect(nm_lower, "mode")]
+
+  y_col <- cand[1]
+}
+df[[y_col]] <- as.factor(df[[y_col]])
+
+# Metric function: η²
+eta_sq_num_factor <- function(x, y) {
+  ok <- !is.na(x) & !is.na(y)
+  x <- x[ok]; y <- y[ok]
+  if (length(x) < 3 || nlevels(y) < 2) return(NA_real_)
+  mu <- mean(x)
+
+  ss_total <- sum((x - mu)^2)
+  if (ss_total <= 0) return(NA_real_)
+
+  ss_between <- sum(sapply(levels(y), function(lv) {
+    xi <- x[y == lv]
+    if (length(xi) == 0) return(0)
+    length(xi) * (mean(xi) - mu)^2
+  }))
+  ss_between / ss_total
+}
+
+# Metric function: Cramér's V
+cramers_v_corrected <- function(x, y) {
+  
+  tbl <- table(x, y)
+  if (nrow(tbl) < 2 || ncol(tbl) < 2) return(NA_real_)
+  chi <- suppressWarnings(chisq.test(tbl, correct = FALSE))
+  n <- sum(tbl)
+  if (n == 0) return(NA_real_)
+  phi2 <- as.numeric(chi$statistic) / n
+  r <- nrow(tbl); c <- ncol(tbl)
+  
+  # Correct bias
+  if (n > 1) {
+    phi2corr <- max(0, phi2 - ((r - 1) * (c - 1)) / (n - 1))
+    rcorr <- r - ((r - 1)^2) / (n - 1)
+    ccorr <- c - ((c - 1)^2) / (n - 1)
+    denom <- min(rcorr - 1, ccorr - 1)
+  } else {
+    phi2corr <- phi2; denom <- min(r - 1, c - 1)
+  }
+  if (denom <= 0) return(NA_real_)
+  sqrt(phi2corr / denom)
+}
+
+# Calculating correlation
+y <- df[[y_col]]
+feat_names <- setdiff(names(df), y_col)
+
+#  η²
+scored_eta <- map_dfr(feat_names, function(f) {
+  x <- df[[f]]
+  if (is.numeric(x)) {
+    val <- eta_sq_num_factor(x, y)
+    tibble(feature = f, association = val, metric = "eta_sq (num~factor)")
+  }
+})
+
+# Cramér's V
+scored_cramers <- map_dfr(feat_names, function(f) {
+  x <- df[[f]]
+  if (!is.numeric(x)) {
+    val <- cramers_v_corrected(as.factor(x), y)
+    tibble(feature = f, association = val, metric = "cramers_v (cat~cat)")
+  }
+})
+
+# Top 20 most relevant features
+topk_eta <- scored_eta |>
+  filter(!is.na(association) & is.finite(association)) |>
+  arrange(desc(association)) |>
+  slice_head(n = 20)
+
+topk_cramers <- scored_cramers |>
+  filter(!is.na(association) & is.finite(association)) |>
+  arrange(desc(association)) |>
+  slice_head(n = 20)
+
+# diagram η²
+eta_plot <- ggplot(topk_eta, aes(x = reorder(feature, association), y = association)) +
+  geom_col() +
+  coord_flip() +
+  labs(title = "Top features related to stop_mainmode (η²)", 
+       x = "Feature", y = "Association (η²)") +
+  theme_minimal(base_size = 12)
+
+# diagram Cramér's V
+cramers_plot <- ggplot(topk_cramers, aes(x = reorder(feature, association), y = association)) +
+  geom_col() +
+  coord_flip() +
+  labs(title = "Top features related to stop_mainmode (Cramér's V)", 
+       x = "Feature", y = "Association (Cramér's V)") +
+  theme_minimal(base_size = 12)
+
+# 4.2
+tau  <- 0.80      
+cut_h <- 1 - tau                      
+
+X   <- df %>% select(where(is.numeric))   
+
+const_cols <- names(X)[sapply(X, function(x) var(x, na.rm = TRUE) == 0 | all(is.na(x)))]
+if (length(const_cols) > 0) X <- X %>% select(-all_of(const_cols))
+
+X_imp <- X %>% mutate(across(everything(), ~ ifelse(is.na(.x), mean(.x, na.rm = TRUE), .x)))
+
+corr <- cor(X_imp, use = "pairwise.complete.obs")
+corr[!is.finite(corr)] <- 0
+dist_mat <- 1 - abs(corr)             
+keep_thresh <- 0.20
+
+diag(corr) <- 0
+max_abs_r <- apply(abs(corr), 2, function(v) max(v, na.rm = TRUE))
+keep_idx   <- which(max_abs_r >= keep_thresh)
+
+corr  <- corr[keep_idx, keep_idx, drop = FALSE]
+X_imp <- X_imp[, keep_idx, drop = FALSE]
+dist_mat <- 1 - abs(corr)
+d        <- as.dist(dist_mat)
+hc       <- hclust(d, method = "average")
+
+library(dendextend)
+par(mar = c(12, 4, 2, 1))  
+dend <- as.dendrogram(hc) |>
+  set("labels_cex", 0.60) |>      
+  set("branches_lwd", 1.2)        
+
+dend_col <- color_branches(dend, h = cut_h)
+
+plot_dendrogram <- function() {
+  plot(dend_col,
+       ylab = "Distance = 1 - |corr|",
+       main = sprintf("Colored branches by |r| cutoff = %.2f", tau))
+  abline(h = cut_h, lty = 2, col = "red")
+}
+
+# 4.3
+y_name <- names(df)[tolower(names(df)) == "stop_mainmode"]
+y <- factor(df[[y_name]])
+
+thr_pct <- 0.02   
+
+dist_tbl <- as.data.frame(table(y)) |>
+  rename(class = y, n = Freq) |>
+  mutate(p = n/sum(n)) |>
+  arrange(desc(n)) |>
+  mutate(cum_p = cumsum(p),
+         rare  = (p < thr_pct))
+
+# Diagram1: Category distribution
+dist_table <- ggplot(dist_tbl, aes(x = reorder(class, -n), y = n, fill = rare)) +
+  geom_col() +
+  geom_text(aes(label = percent(p, accuracy = 0.1)),
+            vjust = -0.2, size = 3) +
+  scale_fill_manual(values = c("FALSE"="grey","TRUE"="red"),
+                    name = sprintf("Rare category: (p<%s)", percent(thr_pct))) +
+  labs(title = "Category distribution of STOP_MAINMODE", x = "Category", y = "Number of category") +
+  theme_minimal(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1),
+        legend.position = "top")
+```
+
+<div class="justify">
+### 1 Define the Problem
+
+This study examines which personal and household characteristics predict residents’ main transport mode on the Gold Coast, and evaluates the accuracy of classification at the stop level. The task is formulated as a multiclass classification problem with STOP_MAINMODE as the outcome (private car, public transport, bicycle, walking, other). Each observation represents a survey stop, with predictors covering demographics (age, gender, employment), household context (size, income, licence status, vehicle ownership), and trip features (origin/destination, purpose, time of day). Unique identifiers are retained solely for data management.
+
+Understanding local mode choice supports transport planning in Queensland by informing demand forecasts, guiding investment in public and active transport, and promoting equitable access. It is hypothesised that vehicle ownership and licence status strongly predict private car use; shorter urban trips favour walking or cycling; and income and household size correlate with public transport use for mandatory trips. Model performance will be evaluated against a majority-class baseline using macro-F1, balanced accuracy, and confusion-matrix analysis to identify policy-relevant patterns.
+
+### 2 Data Description
+
+##### 2.1 Data Source
+
+The dataset is drawn from the 2015 Gold Coast Household Travel Survey, released by the Queensland Department of Transport and Main Roads through the Open Data Portal. It is part of the long-running Queensland Travel Survey program (initiated in 1976 for South East Queensland and 1986 for other regions).
+
+#### 2.2 Data Size
+
+The dataset comprises 22,587 observations and 179 variables, including 80 numerical and 99 categorical variables.
+
+<details>
+
+<summary><b>Sumary Table</b></summary>
+
+```{r summary_table}
+kable(summary_tbl, align = "lc")
+```
+
+</details>
+
+#### 2.3 Describing Numerical Variables
+
+Descriptive statistics (missing values, unique counts, zeros, mean, and standard deviation) were computed for all numerical variables. Twenty-nine variables contain missing data, with `TRIP_TIME7`, `TRIP_TIME8`, and `TRIP_TIME9` showing rates up to 99.95%.
+
+#### 2.4 Describing Non-numeric Variables
+
+For categorical variables, missing values, unique counts, and the top categories were calculated. `TRIP_MODE6`, `TRIP_MODE5`, and `TRIP_MODE4` show missing rates of 99.89%, 99.43%, and 98.24%, respectively. Minor missingness occurs in `VEH_DIESEL`, `VEH_ELECTRIC`, and `VEH_GAS.` The identifier `PERSID` contains 5,899 unique values.
+
+#### 2.5 Existing Challenges
+
+When examining issues in a dataset, by following the steps outlined above, we can first identify that this dataset suffers from high missing values. Subsequently, we can systematically screen for common problems, including outliers, high cardinality, zero inflation, and multicollinearity.
+
+**Outlier**
+
+We employed a robust z-score calculation z = \|x − median\|/MAD, set a threshold \>7, and filtered columns with an anomaly rate ≥1%. Subsequently, these columns were sorted in descending order by extreme value proportion. The analysis revealed that 20 variables contained extreme values at varying proportions. Among them, the field with the highest proportion of extreme values was `STOP_DURATION`， containing 2,676 extreme values, accounting for 15.988% of the total data.
+
+**High Cardinality**
+
+Columns with more than 100 unique values or over 50% unique values are classified as high cardinality. After examining the entire dataset, two columns were identified as high cardinality. There are `STOPID`(100%) and `TRIPID`(94.15%).
+
+**Zero Inflation**
+
+Columns with values ≥90% set to 0 are zero-inflated. After examining the entire dataset, five columns were identified as significantly zero-inflated, they are: `HH_OTHERVEHS` (99.49%), `HH_TRUCKS` (99.10%), `HH_VANS` (97.69%), `TRIP_WAITTIME` (93.65%), `HH_MBIKES` (92.25%).
+
+**Multicollinearity**
+
+By examining the entire dataset and filtering out results where the correlation coefficient \|r\| between any two numerical columns is ≥0.95, we identified 63 highly correlated feature pairs. Feature selection, dimensionality reduction, or regularization should be considered in subsequent processing.
+
+#### 2.6 Target Variable
+
+The target variable is `STOP_MAINMODE`, representing the primary mode of transport (car, public transport, bicycle, walking, other)..
+
+### 3. Data Cleaning
+
+This section describes the systematic cleaning of the Gold Coast transportation survey dataset for travel mode choice analysis.
+
+#### 3.1 Missing Value Treatment
+
+This section outlines the cleaning of the Gold Coast travel survey dataset to prepare it for mode choice analysis.
+
+**Target Variable Processing**
+
+Since `STOP_MAINMODE` is our target variable for travel mode choice analysis, rows with missing values must be removed as they cannot contribute to supervised learning. Imputing travel modes would create artificial patterns that don't reflect actual travel behavior. `STOP_MAINMODE` shows excellent completeness with none missing values, providing a robust dataset for analysis.
+
+**Column Removal Based on High Missingness**
+
+Variables with extreme missingness (\>50%) contain insufficient information for meaningful analysis. Imputing such extensive missing data would essentially create synthetic variables dominated by imputed values, potentially introducing spurious patterns. For travel mode analysis, we remove variables like late-trip stages (`TRIP_MODE7-9`) which rarely occur, and `PERS_MRTINT` which is almost entirely missing. These variables have minimal relevance to mode choice behavior.
+
+<details>
+
+<summary><b>Figure </b></summary>
+
+```{r missingness-plot, message=FALSE, warning=FALSE, fig.width=7, fig.height=5}
+missing_table
+```
+
+</details>
+
+**Vehicle and Trip Variable Imputation**
+
+Variables with moderate missingness (5–30%) require tailored imputation to preserve information. We identified two groups:
+
+-   Vehicle-related variables (\~18.6% missing: `STOP_VEHOCCUP`, `STOP_VEHONORANGEFORM`, `STOP_VEHNUM`, `STOP_VEHWALKTIME`). Missingness reflects non-vehicle trips rather than random gaps. We impute categorical variables as “No Vehicle”, numeric as 0, and `STOP_VEHWALKTIME` with the median of positive values (since it only applies to parked vehicles). This retains the distinction between motorized and non-motorized trips.
+
+-   Trip timing variables (e.g., `TRIP_DURATION` 28.1%, `STOP_DEPHR` 25.9%). Missingness likely comes from incomplete diaries or recall errors. For durations, we first reconstruct logically (e.g., `TRIP_DURATION` = `TRIP_TRAVTIME` + `TRIP_WAITTIME`), then use medians to avoid extremes. For departure times, we back-calculate from arrivals where possible, otherwise imputing the modal hour to preserve observed patterns.
+
+**Near-Complete Column Processing**
+
+For variables with \<0.1% missingness, we chose deletion over imputation to maintain data integrity. These near-complete columns may include location variables, IDs, timestamps, or other critical fields where even minor imputation could introduce bias. Given the minimal sample loss (\<20 rows), deletion has negligible impact on analysis power while ensuring data authenticity.
+
+**Remaining Missing Values**
+
+After the above treatments, some variables still contain missing values (`PERS_ADDITIONALTRAVEL` and `PERS_CYCLEDSCHOOL`). Following our minimal intervention principle, these are left unimputed for this cleaning phase, allowing informed imputation decisions during modeling based on their relationships with the target variable.
+
+#### 3.2 Data Validity Checks
+
+Survey data often contains special codes that should not be treated as actual values. In our dataset, negative values were found primarily in: - Time variables (e.g., `STOP_TRAVTIME`, `TRIP_ARRTIME`) where -1 likely indicates "not recorded" - Count variables (e.g., `STOP_VEHNUM`) where negative values are logically impossible - ID fields where negative values suggest special cases or errors
+
+Without documentation of their specific meanings, we conservatively convert all negative values in these logically non-negative variables to NA to prevent calculation distortion. Similarly, categorical variables contained numeric codes like 998 and 999 which do not appear to be valid response categories. Without documentation to confirm their meanings, these ambiguous codes were also converted to NA to avoid misinterpretation in analysis.
+
+#### 3.3 Type Conversion
+
+Following the principle of minimal intervention for data cleaning, we only corrected obvious type errors where numeric data was stored as text. This focused on vehicle attributes (year, age) and measurement variables (time, distance, weight) that are clearly quantitative in nature.
+
+#### 3.4 Duplicate and Technical Column Removal
+
+`STOPID` serves as the unique row identifier, with `PERSID` and `TRIPID` retained for grouping analyses. After verifying `STOPID` uniqueness, we checked for rows that were identical except for `STOPID` (potential data entry errors) and removed any exact duplicates.
+
+#### 3.5 Outlier Treatment
+
+IQR-based capping was applied to prevent extreme values from dominating model estimation. However, variables with natural long-tail distributions (distance, time, cost) were excluded from this treatment as their extremes represent valid observations (e.g., long-distance trips).
+
+The final cleaned dataset contains **22,583 rows × 163 columns**, ready for travel mode choice analysis.
+
+### 4 Explore and Visualize
+
+#### 4.1 Explore the relationship between independent variables and dependent variables
+
+The following two figures use η² (eta-squared) to visualize the correlation between numerical features and categorical targets, and the other uses Cramér’s V to visualize the correlation between categorical features and categorical targets.The higher the η² or Cramér’s V, the stronger the correlation between the feature and the target (dependent variable).
+
+<details>
+
+<summary><b>Figure1</b></summary>
+
+```{r}
+eta_plot
+```
+
+</details>
+
+As can be seen from the figure above, the five features `VEH_VEHYEAR`, `STOP_NETWORK_DIST`, `VEH_HHWGT14`, `VEHVEHNO`, and `TRIP_TRIP_TRIPSTAGES` have the strongest correlation with the dependent variable `STOP_MAINMODE` and may be used as relatively good features for prediction. However, it may be necessary to focus on reviewing the two features "VEH_VEHYEAR" and "STOP_NETWORK_DIST" with too high η² to confirm whether they are process/posterior variables and consider removing them to avoid the model making incorrect decisions in subsequent training.
+
+<details>
+
+<summary><b>Figure2</b></summary>
+
+```{r}
+cramers_plot
+```
+
+</details>
+
+As shown in the figure above, since the Cramér's V for "STOP_FULLMODE" is 1 (or very close to 1), it can be determined to be a leaky/synonymous field and must be removed. "TRIP_LINKMODE" and "TRIP_MODE1" are also likely leaky/synonymous fields and may be considered for removal to avoid negatively impacting subsequent model predictions. The Cramér's V for the features "PERS_NOLICENCE", "VEH_RUNNINGCOST", "VEH_DIESEL", "VEH_PETROL", and "VEH_HYBRID" are all high and within a reasonable range, indicating a high correlation with the dependent variable. They may be suitable as excellent features for prediction and for training a more accurate model.
+
+#### 4.2 Exploring collinearity between features
+
+The Pearson correlation coefficient was calculated and \|r\| was taken. Hierarchical clustering was performed, defining the distance as 1-\|r\|. This yielded a cluster structure that reflected collinearity between variables. Clusters formed at \|r\| \>= 0.8 (1-\|r\| \<= 0.2) were defined as groups of variables with highly overlapping information.
+
+<details>
+
+<summary><b>Figure</b></summary>
+
+```{r}
+plot_dendrogram()
+```
+
+</details>
+
+According to the above figure, the following clusters are listed (features enclosed in the same bracket are in the same cluster): [STOP_DURATION, TRIP_DURATION] [TRIP_DURATION, TRIP_ENDSTOP, STOP_STOPNO, TRIP_STARTSTOP] [STOP_ARRTIME, TRIP_ARRTIME, STOP_ARRHR, TRIP_ARRHR, STOP_STARTTIME, TRIP_STARTTIME, STOP_STARTHR, TRIP_STARTHR] [STOP_DEPHR, STOP_DEPTIME, TRIP_DEPHR, TRIP_DEPTIME] [HH_ADULTSBIKES, HH_TOTALBIKES] [TRIP_TOTTRIPTIME, TRIP_TRAVTIME] [STOP_TRAVTIME, TRIP_TIME1] [PERS_PERSWGT14, STOP_STOPBASEWEIGHT, TRIP_TRIPBASEWEIGHT, STOP_STOPWGT14, TRIP_TRIPWGT14] [STOP_DEST_SA1_2016, TRIP_DEST_SA1_2016] [STOP_ORIG_SA1_2016, TRIP_ORIG_SA1_2016] The features in these clusters have high collinearity (combined into clusters at the position of 1-\|r\|\<=0.2), indicating that the feature information within the cluster is highly overlapping. If all of them are put into the same model, it is very easy to induce multicollinearity (variance inflation and coefficient instability). Therefore, it is necessary to consider removing features within the cluster and retain features with lower missing rates and more robust distributions.
+
+<div>
+
+<p style="margin:0 0 30px 12px;">
+
+</p>
+
+</div>
+
+#### 4.3 Exploring class imbalance for STOP_MAINMODE (target/dependent variable)
+
+This example shows the number of samples and their proportion for each class in `STOP_MAINMODE`. The rare class (p \< 2%) is marked in red.
+
+<details>
+
+<summary><b>Figure1</b></summary>
+
+```{r}
+dist_table
+```
+
+</details>
+
+<details>
+
+<summary><b>Figure2</b></summary>
+
+```{r}
+# Diagram2：Pareto
+max_n <- max(dist_tbl$n)
+ggplot(dist_tbl, aes(x = reorder(class, -n))) +
+  geom_col(aes(y = n), fill = "grey") +
+  geom_line(aes(y = cum_p * max_n, group = 1), linewidth = 1.1, color = "green") +
+  geom_point(aes(y = cum_p * max_n), color = "blue") +
+  geom_hline(yintercept = 0.8 * max_n, linetype = 2, color = "red") +  
+  scale_y_continuous(
+    name = "Number of category",
+    sec.axis = sec_axis(~ . / max_n, name = "Cumulative Percentage", labels = percent_format(accuracy = 1))
+  ) +
+  labs(title = "Pareto", x = "Category") +
+  theme_minimal(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+</details>
+
+The two figures indicate that the target `STOP_MAINMODE` shows a typical long-tail class distribution. The tail classes have very few samples, which can lead to unidentifiable parameters, large variance, and unstable evaluation metrics. In downstream modeling, the first two classes (“Vehicle Driver” and “Vehicle Passenger”) together cover over 80% of all samples, so using stratified splits/cross-validation is essential; otherwise, some folds may contain no instances of certain classes. If you keep the full multiclass setting including the tail classes, consider resampling, class weighting, or focal loss; alternatively, adopt a hierarchical/two-stage approach: first “major classes vs. other”, then subdivide the “other” group
+
+### 5 Plan for Evaluation
+
+To rigorously assess the performance of classification models, this study adopts a multi-dimensional evaluation framework. The target variable STOP_MAINMODE is a multi-class outcome (vehicle, bus, bicycle, walk, train), and the uneven distribution across classes makes overall accuracy insufficient for a fair evaluation. Accordingly, this study combines several complementary metrics.
+
+Overall accuracy is first reported as a baseline, but special attention is given to **macro-averaged precision**, **recall**, and **F1-score**. These metrics assign equal weight to each class, ensuring that minority modes such as cycling and walking are not overshadowed by dominant categories like private vehicles.
+
+**Precision** measures how many of the samples the model predicts as a particular mode of travel actually belong to that mode. For example, if the model labels 100 trips as cycling and 80 are correct, the precision for cycling is 80%.
+
+**Recall** measures how many of the real-world samples of a particular mode of travel are correctly identified by the model. If 60 of 100 true cycling trips are predicted correctly, the recall is 60%.
+
+**The F1 score**, the harmonic mean of precision and recall, provides a balanced measure of predictive accuracy and coverage, particularly valuable when classes are imbalanced.
+
+To complement these summary statistics, a confusion matrix will be used to visualize misclassification patterns, highlighting, for instance, whether walking trips are frequently misclassified as cycling. Such insights not only identify weaknesses in model performance but also provide interpretable guidance for transport policy.
+
+Finally, to enhance the robustness and generalizability of the model results, this study will employ k-fold cross-validation. This method partitions the dataset into k subsets, selecting one of them as the test set and the remaining as the training set. The results are averaged after repeated iterations. This method reduces the random influence of a single partitioning, allowing for a more objective evaluation of the model's performance under different data partitions.
+
+Through this combination of metrics, visualization, and validation, this study was able to conduct a comprehensive, detailed, and rigorous evaluation of the model's predictive performance.
+
+### 6 Choice of Classification Models
+
+Model selection balances interpretability and predictive performance, combining statistical and machine learning approaches appropriate for a multi-class outcome and heterogeneous predictors.
+
+**Multinominal Logistic Regression**
+
+It is well-suited to handling the multi-categorical nature of the target variable `STOP_MAINMODE`. This model can quantitatively explain the marginal impact of demographic and household characteristics on travel mode choice, for example, whether an increase in vehicle ownership significantly increases the probability of choosing "vehicle." This interpretability is particularly valuable for policymakers.
+
+**Decision Tree**
+
+Decision trees produce clear, interpretable rules. For example, households with more than four members and two vehicles are more likely to choose private cars, whereas students without vehicle access tend to rely on buses. The method handles categorical predictors such as gender and occupation directly, yielding intuitive and easily communicated conclusions.
+
+**Random Forests**
+
+Random forests extend decision trees by aggregating many trees, thereby improving robustness and predictive accuracy. They also provide feature importance rankings, such as assessing whether vehicle count or occupation is most influential, which directly aligns with the study’s objective of identifying key determinants of travel mode.
+
+**Support Vector Machine (SVM)**
+
+SVM particularly well-suited for processing high-dimensional feature combinations. For example, variables such as age, family size, occupation, and number of vehicles may interact with each other in complex ways. SVMs can exploit these nonlinear boundaries using kernel functions, effectively distinguishing easily confused categories such as walking and cycling.
+
+**Gradient Boosting (such as XGBoost)**
+
+Achieves strong predictive accuracy in multi-class settings by iteratively refining misclassified cases. Particularly suited to capturing subtle interactions across household and trip variables, while also providing feature importance.
+
+### 7 Our Innovation
+
+The innovations of this study are reflected in three dimensions.
+
+Data: It draws on household travel survey data from Gold Coast residents, incorporating demographic and household variables such as age, gender, occupation, household size, and vehicle ownership. These features provide an authentic representation of local travel behaviour and are highly relevant to sustainable transport planning.
+
+Methods: The analysis integrates traditional statistical models (logistic regression, decision trees) with machine learning approaches (random forests, support vector machines, gradient boosting). This combined framework enables both interpretation of variable effects and improved predictive accuracy.
+
+Results: Findings are communicated through visual tools, including confusion matrices, feature importance rankings and model comparison plots, which enhancing interpretability and accessibility for policymakers.
+
+Overall, by combining regional data, diverse modelling strategies, and clear presentation, the study offers both academic contributions and practical insights for transport planning.
+</div>
