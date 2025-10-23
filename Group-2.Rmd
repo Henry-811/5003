@@ -1,0 +1,370 @@
+---
+title: "Group2"
+author: "Songhao"
+date: "2025-10-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r}
+# ---- 0) 环境 ----
+set.seed(42)
+library(tidymodels)   # parsnip/workflows/recipes/rsample/tune/yardstick
+library(themis)       # step_smote / step_upsample 等
+library(ranger)       # 随机森林引擎
+library(vip)          # 变量重要性可视化
+library(yardstick)
+tidymodels_prefer()
+
+# ---- 1) 读数 & 目标因子化 ----
+dat <- read.csv("dataset/final_decoded_clean_version10.15.csv")
+library(dplyr)
+
+# 0) 读取时就把“文本NA”当缺失（已读入也可以保底再转一次）
+# dat <- read.csv("dataset/final_decoded_clean_version10.15.csv",
+#                 stringsAsFactors = FALSE,
+#                 na.strings = c("NA","N/A","Not Answer","Unknown","","-"," "))
+# 若已读入，用下面两行把字符里的这些标记转成真正 NA：
+bad_tokens <- c("NA","N/A","Not Answer","Unknown","","-"," ","Not Answered","N/A (some stops were made)")
+dat <- dat %>%
+  mutate(across(where(is.character),
+                ~ {x <- trimws(.); x[x %in% bad_tokens] <- NA_character_; x})) %>%
+  mutate(across(where(is.factor),
+                ~ {x <- as.character(.); x[x %in% bad_tokens] <- NA_character_; factor(x)}))
+
+# 1) 目标列因子化（如已做可跳过）
+dat$STOP_MAINMODE <- as.factor(dat$STOP_MAINMODE)
+
+# 2) 计算每一列缺失率，并直接在 dat 上删除“缺失率 > 70%”的列
+thr <- 0.70
+protect <- c("STOP_MAINMODE","ID","HHID","PERSID","TRIPID","VEHID")  # 需要保留的列名（没有会自动忽略）
+
+col_na_rate <- sapply(dat, function(v) mean(is.na(v)))
+drop_cols <- names(col_na_rate)[col_na_rate > thr & !names(col_na_rate) %in% protect]
+
+# 打印一下被删列和缺失率
+message(length(drop_cols), " columns removed:")
+print(sort(col_na_rate[drop_cols], decreasing = TRUE))
+
+# 从 dat 中删除
+dat <- dat %>% select(-any_of(drop_cols))
+dat <- dat %>% select(-matches("(?i)_imputed$"))
+dat <- dat %>% select(-any_of(c("PERSID","TRIPID","VEHID","HHID","VEH_HHID")))
+dat <- dat %>% select(-any_of(c("VEH_VEHYEAR","STOP_NETWORK_DIST","VEH_HHWGT14","VEH_VEHNO","TRIP_TRIPSTAGES")))
+dat <- dat %>% select(-any_of(c("STOP_FULLMODE","TRIP_LINKMODE","TRIP_MODE1","PERS_NOLICENCE")))
+dat <- dat %>% select(-any_of(c("TRIP_DURATION","TRIP_TRIPNO","TRIP_ENDSTOP","TRIP_STARTSTOP")))
+dat <- dat %>% select(-any_of(c("TRIP_ARRTIME","STOP_ARRTIME","TRIP_ARRHR","STOP_ARRHR","TRIP_STARTTIME","STOP_STARTTIME","TRIP_STARTHR")))
+dat <- dat %>% select(-any_of(c("STOP_DEPHR","TRIP_DEPHR","TRIP_DEPTIME")))
+dat <- dat %>% select(-any_of(c("HH_TOTALBIKES","TRIP_TRAVTIME","TRIP_TIME1","PERS_PERSWGT14","STOP_STOPBASEWEIGHT","TRIP_TRIPBASEWEIGHT","TRIP_TRIPWGT14")))
+dat <- dat %>% select(-any_of(c("TRIP_DEST_SA1_2016","TRIP_ORIG_SA1_2016")))
+
+# readr::write_csv(dat,"data_test.csv" )
+# （可选）检查现在各列缺失率最高的前 10 个
+sort(sapply(dat, function(v) mean(is.na(v))), decreasing = TRUE)[1:10]
+
+
+
+
+```
+
+
+
+
+
+##Random Forest
+
+```{r}
+suppressPackageStartupMessages({
+  library(tidymodels)
+  library(ranger)
+  library(doParallel)
+  library(dplyr)
+  library(readr)
+})
+set.seed(42)
+
+# Read
+DATA_PATH <- "final_cleaned_policy_focused.csv"
+dat <- read_csv(DATA_PATH) %>%
+  mutate(STOP_MAINMODE = as.factor(STOP_MAINMODE))
+
+# Devide
+spl   <- initial_split(dat, prop = 0.8, strata = STOP_MAINMODE)
+train <- training(spl)
+test  <- testing(spl)
+
+# Calculate p
+rec_for_p <- recipe(STOP_MAINMODE ~ ., data = train) %>%
+  
+  step_string2factor(all_nominal_predictors()) %>%                   # 
+  step_impute_median(all_numeric_predictors()) %>%
+  step_impute_mode(all_nominal_predictors()) %>%
+  step_zv(all_predictors())
+
+prep_p <- prep(rec_for_p)
+xtrain <- juice(prep_p) %>% select(-STOP_MAINMODE)
+p <- ncol(xtrain)
+
+# Hyperparameter Group
+
+mtry_vals <- sort(unique(pmin(p, pmax(1, c(floor(sqrt(p)), floor(2*sqrt(p)))))))
+if (length(mtry_vals) == 1) mtry_vals <- unique(c(mtry_vals, max(1, min(p, mtry_vals + 1))))
+minn_vals  <- c(2, 5, 10)
+trees_vals <- c(300, 600)
+
+# class weight
+freq_tbl <- table(train$STOP_MAINMODE)
+w_raw    <- as.numeric(freq_tbl)
+names(w_raw) <- names(freq_tbl)
+w_med    <- median(w_raw)
+class_wts <- (w_med / w_raw)
+
+class_wts <- setNames(as.numeric(class_wts), names(class_wts))
+
+# Create model
+rec_model <- recipe(STOP_MAINMODE ~ ., data = train) %>%
+  
+  step_string2factor(all_nominal_predictors()) %>%
+  step_impute_median(all_numeric_predictors()) %>%
+  step_impute_mode(all_nominal_predictors()) %>%
+  step_zv(all_predictors())
+
+# Model and workflow
+rf_spec <- rand_forest(mtry = tune(), min_n = tune(), trees = tune()) %>%
+  set_engine(
+    "ranger",
+    importance = "impurity",
+    respect.unordered.factors = "order",  
+    sample.fraction = 0.7,
+    class.weights   = class_wts,          
+    num.threads     = max(1, parallel::detectCores()-1)
+  ) %>%
+  set_mode("classification")
+
+wf <- workflow() %>% add_model(rf_spec) %>% add_recipe(rec_model)
+
+# CV:5
+folds <- vfold_cv(train, v = 5, strata = STOP_MAINMODE)
+
+# parallel
+cl <- makeCluster(max(1, parallel::detectCores()-1)); registerDoParallel(cl)
+
+control_g  <- control_grid(verbose = TRUE, parallel_over = "resamples")
+grid_12    <- tidyr::crossing(mtry = mtry_vals, min_n = minn_vals, trees = trees_vals)
+
+grid_res <- tune_grid(
+  wf,
+  resamples = folds,
+  grid      = grid_12,                 
+  metrics   = metric_set(f_meas),
+  control   = control_g
+)
+
+best_params <- select_best(grid_res, metric = "f_meas")
+cat("best param:"); print(best_params)
+
+# Model testing and evaluation
+final_wf  <- finalize_workflow(wf, best_params)
+final_fit <- last_fit(final_wf, split = spl)
+
+pred <- collect_predictions(final_fit)
+
+# overall Accuracy
+overall_acc <- yardstick::accuracy(pred, truth = STOP_MAINMODE, estimate = .pred_class)
+
+
+
+# Confusion Matrix
+cm_mat <- table(truth = pred$STOP_MAINMODE, pred = pred$.pred_class)
+levs   <- union(rownames(cm_mat), colnames(cm_mat))
+cm_mat <- cm_mat[levs, levs, drop = FALSE]
+
+# TP / FP / FN
+tp <- diag(cm_mat)
+fp <- colSums(cm_mat) - tp
+fn <- rowSums(cm_mat) - tp
+
+# Precision / Recall / F1
+precision <- ifelse(tp + fp > 0, tp / (tp + fp), NA_real_)
+recall    <- ifelse(tp + fn > 0, tp / (tp + fn), NA_real_)
+f1        <- ifelse(precision + recall > 0, 2*precision*recall/(precision+recall), NA_real_)
+
+# Macro-average
+by_class <- tibble::tibble(
+  .level    = levs,
+  precision = precision,
+  recall    = recall,
+  f_meas    = f1,
+  
+)
+
+
+overall_pr <- tibble::tibble(.metric = "precision_macro",
+                             .estimate = mean(by_class$precision, na.rm = TRUE))
+overall_re <- tibble::tibble(.metric = "recall_macro",
+                             .estimate = mean(by_class$recall,    na.rm = TRUE))
+overall_f1 <- tibble::tibble(.metric = "f_meas_macro",
+                             .estimate = mean(by_class$f_meas,    na.rm = TRUE))
+
+cat("\n==test all==\n")
+print(overall_acc); print(overall_pr); print(overall_re); print(overall_f1)
+
+# Close parallel
+stopCluster(cl); registerDoSEQ()
+```
+
+
+## Decision Tree
+```{r, message=FALSE, warning=FALSE}
+
+# ----Packages and setup----
+
+libs <- c("tidyverse","caret","rpart","rpart.plot")
+to_install <- libs[!libs %in% installed.packages()[,1]]
+if(length(to_install)) install.packages(to_install, dependencies = TRUE)
+invisible(lapply(libs, library, character.only = TRUE))
+set.seed(42)
+
+t_all_start <- Sys.time()
+
+# ----Load data----
+
+data_path <- "final_cleaned_policy_focused.csv"
+df <- read.csv(data_path, stringsAsFactors = FALSE)
+cat("[INFO] Loaded:", nrow(df), "rows,", ncol(df), "columns\n")
+
+if ("STOPID" %in% names(df)) df$STOPID <- NULL
+stop_var <- "STOP_MAINMODE"
+if (!stop_var %in% names(df)) stop("STOP_MAINMODE not found")
+df[[stop_var]] <- as.factor(df[[stop_var]])
+
+char_cols <- names(df)[sapply(df, is.character)]
+char_cols <- setdiff(char_cols, stop_var)
+if (length(char_cols)) {
+  df[char_cols] <- lapply(df[char_cols], factor)
+  cat("[INFO] Converted to factor:", paste(char_cols, collapse=", "), "\n")
+}
+
+# ----Train/Test split----
+
+idx <- createDataPartition(df[[stop_var]], p = 0.8, list = FALSE)
+train_df <- df[idx, , drop = FALSE]
+test_df  <- df[-idx, , drop = FALSE]
+cat("[INFO] Split:", nrow(train_df), "train,", nrow(test_df), "test\n")
+
+test_df[[stop_var]] <- factor(test_df[[stop_var]], levels = levels(train_df[[stop_var]]))
+
+# ----One-hot encoding----
+
+x_cols <- setdiff(names(train_df), stop_var)
+dv <- dummyVars(as.formula(paste(stop_var, "~ .")), data = train_df, fullRank = TRUE)
+train_x_enc <- as.data.frame(predict(dv, newdata = train_df))
+test_x_enc  <- as.data.frame(predict(dv, newdata = test_df))
+cat("[INFO] Encoded dims - train:", nrow(train_x_enc), "x", ncol(train_x_enc),
+    "; test:", nrow(test_x_enc), "x", ncol(test_x_enc), "\n")
+
+# ----Metrics----
+
+macro_metrics <- function(obs, pred) {
+  valid <- !is.na(obs) & !is.na(pred)
+  if(sum(valid) == 0) return(c(Accuracy=0, MacroPrecision=0, MacroRecall=0, MacroF1=0))
+  obs <- factor(obs[valid])
+  pred <- factor(pred[valid], levels = levels(obs))
+  lev <- levels(obs)
+  per_class <- lapply(lev, function(l) {
+    tp <- sum(obs == l & pred == l)
+    fp <- sum(obs != l & pred == l)
+    fn <- sum(obs == l & pred != l)
+    precision <- ifelse(tp + fp == 0, 0, tp / (tp + fp))
+    recall <- ifelse(tp + fn == 0, 0, tp / (tp + fn))
+    f1 <- ifelse(precision + recall == 0, 0, 2 * precision * recall / (precision + recall))
+    c(precision, recall, f1)
+  })
+  per_class <- do.call(rbind, per_class)
+  acc <- mean(obs == pred)
+  c(Accuracy = acc,
+    MacroPrecision = mean(per_class[,1]),
+    MacroRecall = mean(per_class[,2]),
+    MacroF1 = mean(per_class[,3]))
+}
+summary_fun <- function(data, lev=NULL, model=NULL) macro_metrics(data$obs, data$pred)
+
+# ----CV training----
+
+ctrl <- trainControl(
+  method = "cv",
+  number = 5,
+  summaryFunction = summary_fun,
+  savePredictions = "final",
+  verboseIter = FALSE
+)
+
+grid_cp <- expand.grid(cp = seq(0.0000001, 0.000005, by = 0.000005))
+
+t_train_start <- Sys.time()
+fit_cp <- train(
+  x = train_x_enc,
+  y = train_df[[stop_var]],
+  method = "rpart",
+  trControl = ctrl,
+  tuneGrid = grid_cp,
+  metric = "MacroF1",
+  control = rpart.control(
+    xval = 0,
+    minsplit = 30,
+    minbucket = 15,
+    maxdepth = 12,
+    maxsurrogate = 2,
+    maxcompete = 0
+  )
+)
+t_train_end <- Sys.time()
+
+# ----Display output----
+
+cat("\n[INFO] Training time:", round(as.numeric(difftime(t_train_end, t_train_start, units="secs")),2), "sec\n")
+
+cat("\n[CV Results]\n")
+res <- as.data.frame(fit_cp$results[, c("cp","Accuracy","MacroPrecision","MacroRecall","MacroF1")])
+write.table(res, row.names = FALSE, quote = FALSE, sep = "\t")
+
+cat("\n[Best Tune]\n")
+write.table(fit_cp$bestTune, row.names = FALSE, quote = FALSE, sep = "\t")
+
+# ----Test evaluation----
+
+test_pred <- predict(fit_cp, newdata = test_x_enc)
+te <- macro_metrics(test_df[[stop_var]], test_pred)
+
+cat("\n[Final Test Metrics]\n")
+cat(sprintf("Accuracy       : %.4f\n", te["Accuracy"]))
+cat(sprintf("Macro Precision: %.4f\n", te["MacroPrecision"]))
+cat(sprintf("Macro Recall   : %.4f\n", te["MacroRecall"]))
+cat(sprintf("Macro F1       : %.4f\n", te["MacroF1"]))
+
+t_all_end <- Sys.time()
+cat("\n[INFO] Total pipeline time:", round(as.numeric(difftime(t_all_end, t_all_start, units="secs")),2), "sec\n")
+
+```
