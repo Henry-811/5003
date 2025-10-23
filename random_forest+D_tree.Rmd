@@ -28,66 +28,7 @@ plot(pressure)
 ```
 
 Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
-```{r}
-# ---- 0) 环境 ----
-set.seed(42)
-library(tidymodels)   # parsnip/workflows/recipes/rsample/tune/yardstick
-library(themis)       # step_smote / step_upsample 等
-library(ranger)       # 随机森林引擎
-library(vip)          # 变量重要性可视化
-library(yardstick)
-tidymodels_prefer()
 
-# ---- 1) 读数 & 目标因子化 ----
-dat <- read.csv("dataset/final_decoded_clean_version10.15.csv")
-library(dplyr)
-
-# 0) 读取时就把“文本NA”当缺失（已读入也可以保底再转一次）
-# dat <- read.csv("dataset/final_decoded_clean_version10.15.csv",
-#                 stringsAsFactors = FALSE,
-#                 na.strings = c("NA","N/A","Not Answer","Unknown","","-"," "))
-# 若已读入，用下面两行把字符里的这些标记转成真正 NA：
-bad_tokens <- c("NA","N/A","Not Answer","Unknown","","-"," ","Not Answered","N/A (some stops were made)")
-dat <- dat %>%
-  mutate(across(where(is.character),
-                ~ {x <- trimws(.); x[x %in% bad_tokens] <- NA_character_; x})) %>%
-  mutate(across(where(is.factor),
-                ~ {x <- as.character(.); x[x %in% bad_tokens] <- NA_character_; factor(x)}))
-
-# 1) 目标列因子化（如已做可跳过）
-dat$STOP_MAINMODE <- as.factor(dat$STOP_MAINMODE)
-
-# 2) 计算每一列缺失率，并直接在 dat 上删除“缺失率 > 70%”的列
-thr <- 0.70
-protect <- c("STOP_MAINMODE","ID","HHID","PERSID","TRIPID","VEHID")  # 需要保留的列名（没有会自动忽略）
-
-col_na_rate <- sapply(dat, function(v) mean(is.na(v)))
-drop_cols <- names(col_na_rate)[col_na_rate > thr & !names(col_na_rate) %in% protect]
-
-# 打印一下被删列和缺失率
-message(length(drop_cols), " columns removed:")
-print(sort(col_na_rate[drop_cols], decreasing = TRUE))
-
-# 从 dat 中删除
-dat <- dat %>% select(-any_of(drop_cols))
-dat <- dat %>% select(-matches("(?i)_imputed$"))
-dat <- dat %>% select(-any_of(c("PERSID","TRIPID","VEHID","HHID","VEH_HHID")))
-dat <- dat %>% select(-any_of(c("VEH_VEHYEAR","STOP_NETWORK_DIST","VEH_HHWGT14","VEH_VEHNO","TRIP_TRIPSTAGES")))
-dat <- dat %>% select(-any_of(c("STOP_FULLMODE","TRIP_LINKMODE","TRIP_MODE1","PERS_NOLICENCE")))
-dat <- dat %>% select(-any_of(c("TRIP_DURATION","TRIP_TRIPNO","TRIP_ENDSTOP","TRIP_STARTSTOP")))
-dat <- dat %>% select(-any_of(c("TRIP_ARRTIME","STOP_ARRTIME","TRIP_ARRHR","STOP_ARRHR","TRIP_STARTTIME","STOP_STARTTIME","TRIP_STARTHR")))
-dat <- dat %>% select(-any_of(c("STOP_DEPHR","TRIP_DEPHR","TRIP_DEPTIME")))
-dat <- dat %>% select(-any_of(c("HH_TOTALBIKES","TRIP_TRAVTIME","TRIP_TIME1","PERS_PERSWGT14","STOP_STOPBASEWEIGHT","TRIP_TRIPBASEWEIGHT","TRIP_TRIPWGT14")))
-dat <- dat %>% select(-any_of(c("TRIP_DEST_SA1_2016","TRIP_ORIG_SA1_2016")))
-
-# readr::write_csv(dat,"data_test.csv" )
-# （可选）检查现在各列缺失率最高的前 10 个
-sort(sapply(dat, function(v) mean(is.na(v))), decreasing = TRUE)[1:10]
-
-
-
-
-```
 
 
 
