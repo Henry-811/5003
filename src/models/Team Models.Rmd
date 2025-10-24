@@ -1,0 +1,1643 @@
+---
+title: "Group2"
+author: "Songhao"
+date: "2025-10-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Auto-install missing packages
+required_packages <- c("tidymodels", "ranger", "doParallel", "dplyr", "readr",
+                       "rpart", "rpart.plot", "caret", "xgboost",
+                       "ParBayesianOptimization", "foreach", "glmnet", "vip", "tidyr", "forcats", "stringr")
+missing_packages <- required_packages[!required_packages %in% installed.packages()[,"Package"]]
+if (length(missing_packages) > 0) {
+  cat("Installing missing packages:", paste(missing_packages, collapse = ", "), "\n")
+  install.packages(missing_packages, dependencies = TRUE, repos = "https://cloud.r-project.org")
+}
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+
+
+
+
+##Random Forest
+
+```{r, message=FALSE, warning=FALSE}
+suppressPackageStartupMessages({
+  library(tidymodels)
+  library(ranger)
+  library(doParallel)
+  library(dplyr)
+  library(readr)
+})
+
+set.seed(5003)
+
+t_all_start_rf <- Sys.time()
+
+DATA_PATH <- "final_cleaned_policy_focused.csv"
+
+cat("\n=== Random Forest: Grid Search Optimization ===\n")
+cat("[INFO] Grid search over hyperparameter combinations\n")
+cat("[INFO] 5-fold CV per combination\n\n")
+
+dat <- read_csv(DATA_PATH, show_col_types = FALSE) %>%
+  mutate(STOP_MAINMODE = as.factor(STOP_MAINMODE))
+
+spl <- initial_split(dat, prop = 0.8, strata = STOP_MAINMODE)
+train <- training(spl)
+test <- testing(spl)
+
+# Create model recipe ONCE and reuse
+rec_model <- recipe(STOP_MAINMODE ~ ., data = train) %>%
+  step_string2factor(all_nominal_predictors()) %>%
+  step_impute_median(all_numeric_predictors()) %>%
+  step_impute_mode(all_nominal_predictors()) %>%
+  step_zv(all_predictors())
+
+# Calculate p from the SAME recipe used for training
+prep_rec <- prep(rec_model)
+xtrain <- juice(prep_rec) %>% select(-STOP_MAINMODE)
+p <- ncol(xtrain)
+
+# Hyperparameter Group
+mtry_vals <- sort(unique(pmin(p, pmax(1, c(floor(sqrt(p)), floor(2*sqrt(p)))))))
+if (length(mtry_vals) == 1) mtry_vals <- unique(c(mtry_vals, max(1, min(p, mtry_vals + 1))))
+minn_vals  <- c(2, 5, 10)
+trees_vals <- c(300, 600)
+
+# class weight
+freq_tbl <- table(train$STOP_MAINMODE)
+w_raw    <- as.numeric(freq_tbl)
+names(w_raw) <- names(freq_tbl)
+w_med    <- median(w_raw)
+class_wts <- (w_med / w_raw)
+
+class_wts <- setNames(as.numeric(class_wts), names(class_wts))
+
+# Model and workflow
+rf_spec <- rand_forest(mtry = tune(), min_n = tune(), trees = tune()) %>%
+  set_engine(
+    "ranger",
+    importance = "impurity",
+    respect.unordered.factors = "order",  
+    sample.fraction = 0.7,
+    class.weights   = class_wts,          
+    num.threads     = max(1, parallel::detectCores()-1)
+  ) %>%
+  set_mode("classification")
+
+wf <- workflow() %>% add_model(rf_spec) %>% add_recipe(rec_model)
+
+# CV:5
+folds <- vfold_cv(train, v = 5, strata = STOP_MAINMODE)
+
+# Define Macro F1 metric
+f_meas_macro <- metric_tweak("f_meas_macro", f_meas, estimator = "macro_weighted")
+
+# Create optimization log
+log_file_rf <- "random_forest_optimization.log"
+cat("=== Random Forest Grid Search Progress ===\n", file = log_file_rf)
+cat(sprintf("Started: %s\n\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S")), file = log_file_rf, append = TRUE)
+cat(sprintf("[INFO] Grid search: %d combinations\n", length(mtry_vals) * length(minn_vals) * length(trees_vals)),
+    file = log_file_rf, append = TRUE)
+cat("[INFO] Hyperparameters: mtry, min_n, trees\n", file = log_file_rf, append = TRUE)
+cat("[INFO] Optimizing: Macro F1 score via 5-fold CV\n\n", file = log_file_rf, append = TRUE)
+
+# parallel
+cl <- makeCluster(max(1, parallel::detectCores()-1)); registerDoParallel(cl)
+
+cat(sprintf("[INFO] Parallel cluster: %d cores\n", parallel::detectCores() - 1))
+cat(sprintf("[INFO] Parallel cluster: %d cores\n", parallel::detectCores() - 1),
+    file = log_file_rf, append = TRUE)
+
+cat(sprintf("\n[%s] Starting grid search...\n", format(Sys.time(), "%H:%M:%S")))
+cat(sprintf("\n[%s] Starting grid search...\n", format(Sys.time(), "%H:%M:%S")),
+    file = log_file_rf, append = TRUE)
+
+t_train_start_rf <- Sys.time()
+
+control_g  <- control_grid(verbose = FALSE, parallel_over = "resamples")
+grid_12    <- tidyr::crossing(mtry = mtry_vals, min_n = minn_vals, trees = trees_vals)
+
+grid_res <- tune_grid(
+  wf,
+  resamples = folds,
+  grid      = grid_12,
+  metrics   = metric_set(f_meas_macro),
+  control   = control_g
+)
+
+t_train_end_rf <- Sys.time()
+
+cat(sprintf("\n[%s] Grid search complete\n", format(Sys.time(), "%H:%M:%S")))
+cat(sprintf("\n[%s] Grid search complete\n", format(Sys.time(), "%H:%M:%S")),
+    file = log_file_rf, append = TRUE)
+
+# Get all results
+all_results_rf <- collect_metrics(grid_res)
+
+best_params <- select_best(grid_res, metric = "f_meas_macro")
+best_score_rf <- all_results_rf %>%
+  filter(.metric == "f_meas_macro") %>%
+  filter(mtry == best_params$mtry, min_n == best_params$min_n, trees == best_params$trees) %>%
+  pull(mean)
+
+# Log final summary
+cat(sprintf("\n=== OPTIMIZATION COMPLETE ===\n"), file = log_file_rf, append = TRUE)
+cat(sprintf("Best CV Macro F1: %.4f\n", best_score_rf), file = log_file_rf, append = TRUE)
+cat(sprintf("Best params: mtry=%d, min_n=%d, trees=%d\n",
+            best_params$mtry, best_params$min_n, best_params$trees),
+    file = log_file_rf, append = TRUE)
+cat(sprintf("Grid search time: %.1f sec (%.1f min)\n",
+            as.numeric(difftime(t_train_end_rf, t_train_start_rf, units="secs")),
+            as.numeric(difftime(t_train_end_rf, t_train_start_rf, units="mins"))),
+    file = log_file_rf, append = TRUE)
+
+cat("\n=== OPTIMIZATION COMPLETE ===\n")
+cat("[Best CV Macro F1]:", best_score_rf, "\n")
+cat("[Best params]\n")
+print(best_params)
+
+# Model testing and evaluation
+final_wf  <- finalize_workflow(wf, best_params)
+final_fit <- last_fit(final_wf, split = spl)
+
+pred <- collect_predictions(final_fit)
+
+# overall Accuracy
+overall_acc <- yardstick::accuracy(pred, truth = STOP_MAINMODE, estimate = .pred_class)
+
+
+
+# Confusion Matrix
+cm_mat <- table(truth = pred$STOP_MAINMODE, pred = pred$.pred_class)
+levs   <- union(rownames(cm_mat), colnames(cm_mat))
+cm_mat <- cm_mat[levs, levs, drop = FALSE]
+
+# TP / FP / FN
+tp <- diag(cm_mat)
+fp <- colSums(cm_mat) - tp
+fn <- rowSums(cm_mat) - tp
+
+# Precision / Recall / F1
+precision <- ifelse(tp + fp > 0, tp / (tp + fp), NA_real_)
+recall    <- ifelse(tp + fn > 0, tp / (tp + fn), NA_real_)
+f1        <- ifelse(precision + recall > 0, 2*precision*recall/(precision+recall), NA_real_)
+
+# Macro-average
+by_class <- tibble::tibble(
+  .level    = levs,
+  precision = precision,
+  recall    = recall,
+  f_meas    = f1,
+  
+)
+
+
+overall_pr <- tibble::tibble(.metric = "precision_macro",
+                             .estimate = mean(by_class$precision, na.rm = TRUE))
+overall_re <- tibble::tibble(.metric = "recall_macro",
+                             .estimate = mean(by_class$recall,    na.rm = TRUE))
+overall_f1 <- tibble::tibble(.metric = "f_meas_macro",
+                             .estimate = mean(by_class$f_meas,    na.rm = TRUE))
+
+# Log to file
+cat(sprintf("\n=== TEST SET PERFORMANCE ===\n"), file = log_file_rf, append = TRUE)
+cat(sprintf("Test Accuracy: %.4f\n", overall_acc$.estimate), file = log_file_rf, append = TRUE)
+cat(sprintf("Test Precision (Macro): %.4f\n", overall_pr$.estimate), file = log_file_rf, append = TRUE)
+cat(sprintf("Test Recall (Macro): %.4f\n", overall_re$.estimate), file = log_file_rf, append = TRUE)
+cat(sprintf("Test Macro F1: %.4f\n", overall_f1$.estimate), file = log_file_rf, append = TRUE)
+
+# Log to console
+cat("\n=== TEST SET PERFORMANCE ===\n")
+cat(sprintf("Test Accuracy: %.4f\n", overall_acc$.estimate))
+cat(sprintf("Test Precision (Macro): %.4f\n", overall_pr$.estimate))
+cat(sprintf("Test Recall (Macro): %.4f\n", overall_re$.estimate))
+cat(sprintf("Test Macro F1: %.4f\n", overall_f1$.estimate))
+
+t_all_end_rf <- Sys.time()
+total_time_rf <- as.numeric(difftime(t_all_end_rf, t_all_start_rf, units = "secs"))
+
+cat(sprintf("\n[%s] Complete! Total time: %.1f sec (%.1f min)\n",
+            format(Sys.time(), "%H:%M:%S"), total_time_rf, total_time_rf/60))
+cat(sprintf("\n[%s] Complete! Total time: %.1f sec (%.1f min)\n",
+            format(Sys.time(), "%H:%M:%S"), total_time_rf, total_time_rf/60),
+    file = log_file_rf, append = TRUE)
+
+cat("\n[INFO] Total pipeline time:", round(total_time_rf, 2), "sec\n")
+
+# Close parallel
+stopCluster(cl); registerDoSEQ()
+```
+
+
+## GLM-NET (Elastic Net Logistic Regression) - Optimized
+
+```{r, message=FALSE, warning=FALSE}
+
+# ----Packages and setup----
+
+suppressPackageStartupMessages({
+  library(tidymodels)
+  library(glmnet)
+  library(Matrix)
+  library(doParallel)
+  library(dplyr)
+  library(readr)
+  library(tidyr)
+  library(forcats)
+  library(stringr)
+})
+
+set.seed(5003)
+
+t_all_start_glmnet <- Sys.time()
+
+DATA_PATH_GLMNET <- "final_cleaned_policy_focused.csv"
+
+cat("\n=== GLM-NET: Sparse Matrix + Tidymodels Optimization ===\n")
+cat("[INFO] Reduced maxit: 10,000 (20× faster than 200,000)\n")
+cat("[INFO] Penalty range: [1e-5, 1e-2] (prevents over-regularization)\n")
+cat("[INFO] Bayesian optimization: 16 iterations (5 initial + 11 Bayesian)\n\n")
+
+
+# ----Load and preprocess data----
+
+dat_raw_glmnet <- read_csv(DATA_PATH_GLMNET, show_col_types = FALSE) %>%
+  mutate(STOP_MAINMODE = as.factor(STOP_MAINMODE))
+
+cat("[INFO] Loaded:", nrow(dat_raw_glmnet), "rows,", ncol(dat_raw_glmnet), "columns\n")
+
+# Convert character columns to factors
+dat_glmnet <- dat_raw_glmnet %>%
+  mutate(across(where(is.character), as.factor))
+
+# Drop empty levels
+dat_glmnet$STOP_MAINMODE <- dat_glmnet$STOP_MAINMODE %>% fct_drop()
+
+# Clean level names for valid column names
+lv_old <- levels(dat_glmnet$STOP_MAINMODE)
+lv_new <- make.names(lv_old, unique = TRUE)
+levels(dat_glmnet$STOP_MAINMODE) <- lv_new
+
+# Remove missing responses
+dat_glmnet <- dat_glmnet %>% filter(!is.na(STOP_MAINMODE))
+
+cat("[INFO] Classes:", length(levels(dat_glmnet$STOP_MAINMODE)), "\n")
+
+# ----Train/test split----
+
+set.seed(5003)
+data_split_glmnet <- initial_split(dat_glmnet, prop = 0.8, strata = STOP_MAINMODE)
+train_dat_glmnet <- training(data_split_glmnet)
+test_dat_glmnet <- testing(data_split_glmnet)
+
+cat("[INFO] Split:", nrow(train_dat_glmnet), "train,", nrow(test_dat_glmnet), "test\n")
+
+# ----Recipe: preprocessing----
+
+# Identify ID columns
+id_like <- names(train_dat_glmnet)[str_detect(tolower(names(train_dat_glmnet)), "id|uuid|index|record")]
+
+# Recipe with one-hot encoding (creates natural sparse structure for glmnet)
+rec_glmnet <- recipe(STOP_MAINMODE ~ ., data = train_dat_glmnet) %>%
+  update_role(any_of(id_like), new_role = "id") %>%
+  step_rm(any_of(id_like)) %>%
+  step_string2factor(where(is.character)) %>%
+  step_unknown(all_nominal_predictors()) %>%
+  step_other(all_nominal_predictors(), threshold = 0.01) %>%
+  step_zv(all_predictors()) %>%
+  step_impute_median(all_numeric_predictors()) %>%
+  step_normalize(all_numeric_predictors()) %>%
+  step_dummy(all_nominal_predictors(), one_hot = TRUE)
+
+# Note: glmnet engine automatically uses sparse matrices internally when beneficial
+
+# ----Model specification----
+
+# KEY IMPROVEMENT: Reduced maxit from 200,000 to 10,000 (20× faster convergence)
+model_spec_glmnet <- multinom_reg(penalty = tune(), mixture = tune()) %>%
+  set_engine("glmnet", maxit = 10000)
+
+wf_glmnet <- workflow() %>%
+  add_model(model_spec_glmnet) %>%
+  add_recipe(rec_glmnet)
+
+# ----Cross-validation setup----
+
+set.seed(5003)
+folds_glmnet <- vfold_cv(train_dat_glmnet, v = 5, strata = STOP_MAINMODE)
+
+cat("[INFO] 5-fold CV created (fixed for all parameter combinations)\n")
+
+# Define metrics - only use robust metrics during CV
+# Precision and recall can fail with rare classes in CV folds
+f_meas_macro_glmnet <- yardstick::metric_tweak("f_meas_macro", yardstick::f_meas, estimator = "macro")
+
+my_metrics_glmnet <- metric_set(accuracy, f_meas_macro_glmnet)
+
+# ----Parallel setup----
+
+cl_glmnet <- makeCluster(max(1, parallel::detectCores() - 1))
+registerDoParallel(cl_glmnet)
+
+cat(sprintf("[INFO] Parallel cluster: %d cores\n", parallel::detectCores() - 1))
+
+# ----Bayesian optimization with custom logging----
+
+log_file_glmnet <- "glmnet_optimization.log"
+cat("=== GLM-NET Bayesian Optimization Progress ===\n", file = log_file_glmnet)
+cat(sprintf("Started: %s\n\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S")), file = log_file_glmnet, append = TRUE)
+cat("[INFO] Optimized Bayesian optimization: 16 iterations (5 initial + 11 Bayesian)\n", file = log_file_glmnet, append = TRUE)
+cat("[INFO] maxit reduced to 10,000 (20× faster convergence)\n", file = log_file_glmnet, append = TRUE)
+cat("[INFO] Optimizing: Macro F1 score via 5-fold CV\n\n", file = log_file_glmnet, append = TRUE)
+cat("[NOTE] Warning about rare classes (<8 obs in fold) is expected with 13-class imbalanced data\n\n",
+    file = log_file_glmnet, append = TRUE)
+
+t_train_start_glmnet <- Sys.time()
+
+# KEY FIX: Penalty range tuned to prevent over-regularization
+# Working range from successful runs: penalty ~1e-5 to 1e-4
+# Higher penalties (>1e-3) cause class collapse and poor test generalization
+glmnet_param <- parameters(
+  penalty(range = c(-5, -2), trans = scales::log10_trans()),  # [1e-5, 1e-2]
+  mixture(range = c(0, 1))                                      # [0, 1] Full Lasso-Ridge range
+)
+
+cat(sprintf("\n[%s] Starting Bayesian optimization (16 iterations)...\n",
+            format(Sys.time(), "%H:%M:%S")),
+    file = log_file_glmnet, append = TRUE)
+cat("[NOTE] Penalty range [1e-5, 1e-2] prevents over-regularization and class collapse\n",
+    file = log_file_glmnet, append = TRUE)
+
+# Iterative Bayesian optimization with real-time logging
+iteration_counter_glmnet <- 0
+start_time_global_glmnet <- Sys.time()
+
+# Initial 5 points
+cat("\n[INFO] Running initial 5 iterations...\n")
+bayes_rs_glmnet <- tune_bayes(
+  wf_glmnet,
+  resamples = folds_glmnet,
+  metrics = my_metrics_glmnet,
+  initial = 5,
+  iter = 0,  # Just initial points
+  param_info = glmnet_param,
+  control = control_bayes(
+    verbose = FALSE,
+    save_pred = FALSE,
+    event_level = "first",
+    parallel_over = "resamples"
+  )
+)
+
+# Log initial 5 iterations
+initial_results <- collect_metrics(bayes_rs_glmnet) %>%
+  select(penalty, mixture, .metric, mean) %>%
+  pivot_wider(names_from = .metric, values_from = mean)
+
+for (i in 1:nrow(initial_results)) {
+  iteration_counter_glmnet <- iteration_counter_glmnet + 1
+  total_elapsed <- as.numeric(difftime(Sys.time(), start_time_global_glmnet, units = "secs"))
+  avg_time <- total_elapsed / iteration_counter_glmnet
+  remaining <- avg_time * (16 - iteration_counter_glmnet)
+
+  cat(sprintf("\n[%s] Iteration %2d/16 (initial)\n",
+              format(Sys.time(), "%H:%M:%S"), iteration_counter_glmnet),
+      file = log_file_glmnet, append = TRUE)
+  cat(sprintf("  5-Fold CV: Acc=%.4f | MacroF1=%.4f\n",
+              initial_results$accuracy[i], initial_results$f_meas_macro[i]),
+      file = log_file_glmnet, append = TRUE)
+  cat(sprintf("  Params: penalty=%.6f, mixture=%.2f\n",
+              initial_results$penalty[i], initial_results$mixture[i]),
+      file = log_file_glmnet, append = TRUE)
+  cat(sprintf("  Time: Total=%02d:%02d | ETA=%02d:%02d\n",
+              floor(total_elapsed/60), floor(total_elapsed) %% 60,
+              floor(remaining/60), floor(remaining) %% 60),
+      file = log_file_glmnet, append = TRUE)
+
+  cat(sprintf("[%s] Iteration %2d/16 | MacroF1=%.4f | ETA=%02d:%02d\n",
+              format(Sys.time(), "%H:%M:%S"), iteration_counter_glmnet,
+              initial_results$f_meas_macro[i],
+              floor(remaining/60), floor(remaining) %% 60))
+}
+
+# Run remaining 11 Bayesian iterations one at a time for real-time logging
+cat("\n[INFO] Running Bayesian iterations 6-16...\n")
+for (bayes_iter in 1:11) {
+  iter_start <- Sys.time()
+
+  bayes_rs_glmnet <- tune_bayes(
+    wf_glmnet,
+    resamples = folds_glmnet,
+    metrics = my_metrics_glmnet,
+    initial = bayes_rs_glmnet,
+    iter = 1,  # One iteration at a time
+    param_info = glmnet_param,
+    control = control_bayes(
+      verbose = FALSE,
+      save_pred = FALSE,
+      event_level = "first",
+      parallel_over = "resamples"
+    )
+  )
+
+  # Get latest result
+  latest_result <- collect_metrics(bayes_rs_glmnet) %>%
+    select(penalty, mixture, .metric, mean) %>%
+    pivot_wider(names_from = .metric, values_from = mean) %>%
+    tail(1)
+
+  iteration_counter_glmnet <- iteration_counter_glmnet + 1
+  iter_time <- as.numeric(difftime(Sys.time(), iter_start, units = "secs"))
+  total_elapsed <- as.numeric(difftime(Sys.time(), start_time_global_glmnet, units = "secs"))
+  avg_time <- total_elapsed / iteration_counter_glmnet
+  remaining <- avg_time * (16 - iteration_counter_glmnet)
+
+  # Log to file
+  cat(sprintf("\n[%s] Iteration %2d/16 (Bayesian)\n",
+              format(Sys.time(), "%H:%M:%S"), iteration_counter_glmnet),
+      file = log_file_glmnet, append = TRUE)
+  cat(sprintf("  5-Fold CV: Acc=%.4f | MacroF1=%.4f\n",
+              latest_result$accuracy, latest_result$f_meas_macro),
+      file = log_file_glmnet, append = TRUE)
+  cat(sprintf("  Params: penalty=%.6f, mixture=%.2f\n",
+              latest_result$penalty, latest_result$mixture),
+      file = log_file_glmnet, append = TRUE)
+  cat(sprintf("  Time: Iter=%.1fs | Total=%02d:%02d | ETA=%02d:%02d\n",
+              iter_time,
+              floor(total_elapsed/60), floor(total_elapsed) %% 60,
+              floor(remaining/60), floor(remaining) %% 60),
+      file = log_file_glmnet, append = TRUE)
+
+  # Log to console
+  cat(sprintf("[%s] Iteration %2d/16 | MacroF1=%.4f | Time=%.1fs | ETA=%02d:%02d\n",
+              format(Sys.time(), "%H:%M:%S"), iteration_counter_glmnet,
+              latest_result$f_meas_macro, iter_time,
+              floor(remaining/60), floor(remaining) %% 60))
+}
+
+t_train_end_glmnet <- Sys.time()
+
+cat(sprintf("\n[%s] Completed Bayesian optimization\n",
+            format(Sys.time(), "%H:%M:%S")),
+    file = log_file_glmnet, append = TRUE)
+
+# Get all final results
+all_results <- collect_metrics(bayes_rs_glmnet) %>%
+  select(penalty, mixture, .metric, mean) %>%
+  pivot_wider(names_from = .metric, values_from = mean)
+
+# Select best parameters based on Macro F1 (manual extraction since iterative tune_bayes breaks select_best)
+best_params_glmnet <- all_results %>%
+  slice_max(f_meas_macro, n = 1) %>%
+  select(penalty, mixture) %>%
+  mutate(.config = "best")
+
+best_score_glmnet <- all_results %>%
+  slice_max(f_meas_macro, n = 1) %>%
+  pull(f_meas_macro)
+
+# Log final summary
+cat(sprintf("\n=== OPTIMIZATION COMPLETE ===\n"), file = log_file_glmnet, append = TRUE)
+cat(sprintf("Best iteration: %s\n",
+            which.max(all_results$f_meas_macro)),
+    file = log_file_glmnet, append = TRUE)
+cat(sprintf("Best CV Macro F1: %.4f\n", best_score_glmnet), file = log_file_glmnet, append = TRUE)
+cat(sprintf("Best params: penalty=%.6f, mixture=%.2f\n",
+            best_params_glmnet$penalty, best_params_glmnet$mixture),
+    file = log_file_glmnet, append = TRUE)
+cat(sprintf("Optimization time: %.1f sec (%.1f min)\n",
+            as.numeric(difftime(t_train_end_glmnet, t_train_start_glmnet, units="secs")),
+            as.numeric(difftime(t_train_end_glmnet, t_train_start_glmnet, units="mins"))),
+    file = log_file_glmnet, append = TRUE)
+
+cat("\n=== OPTIMIZATION COMPLETE ===\n")
+cat("[Best CV Macro F1]:", best_score_glmnet, "\n")
+cat("[Best Params]\n")
+print(best_params_glmnet)
+
+# ----Train final model with best parameters----
+
+cat(sprintf("\n[%s] Training final model with best parameters...\n",
+            format(Sys.time(), "%H:%M:%S")))
+
+final_wf_glmnet <- finalize_workflow(wf_glmnet, best_params_glmnet)
+final_fit_glmnet <- fit(final_wf_glmnet, data = train_dat_glmnet)
+
+cat(sprintf("[%s] Final model trained\n", format(Sys.time(), "%H:%M:%S")))
+
+# ----Test evaluation----
+
+cat(sprintf("\n[%s] Evaluating on test set...\n", format(Sys.time(), "%H:%M:%S")))
+
+# Predict on test set
+test_pred_glmnet <- predict(final_fit_glmnet, test_dat_glmnet, type = "class")
+test_pred_glmnet <- bind_cols(test_dat_glmnet %>% select(STOP_MAINMODE), test_pred_glmnet)
+
+# Manual calculation of all metrics (robust to rare classes)
+# This approach handles classes with zero predictions gracefully
+obs <- test_pred_glmnet$STOP_MAINMODE
+pred <- test_pred_glmnet$.pred_class
+lev <- levels(obs)
+
+# Overall accuracy
+test_acc <- mean(obs == pred)
+
+# Per-class metrics with safe division (avoids NA/NaN for rare classes)
+per_class_metrics <- lapply(lev, function(l) {
+  tp <- sum(obs == l & pred == l)
+  fp <- sum(obs != l & pred == l)
+  fn <- sum(obs == l & pred != l)
+
+  # Use 0 instead of NA for undefined metrics (when denominator is 0)
+  precision <- ifelse(tp + fp == 0, 0, tp / (tp + fp))
+  recall <- ifelse(tp + fn == 0, 0, tp / (tp + fn))
+  f1 <- ifelse(precision + recall == 0, 0, 2 * precision * recall / (precision + recall))
+
+  c(precision = precision, recall = recall, f1 = f1)
+})
+
+per_class_metrics <- do.call(rbind, per_class_metrics)
+
+# Macro averages (mean across all classes)
+test_prec <- mean(per_class_metrics[, "precision"])
+test_rec <- mean(per_class_metrics[, "recall"])
+test_f1 <- mean(per_class_metrics[, "f1"])
+
+# Log to file
+cat(sprintf("\n=== TEST SET PERFORMANCE ===\n"), file = log_file_glmnet, append = TRUE)
+cat(sprintf("Test Accuracy: %.4f\n", test_acc), file = log_file_glmnet, append = TRUE)
+cat(sprintf("Test Precision (Macro): %.4f\n", test_prec), file = log_file_glmnet, append = TRUE)
+cat(sprintf("Test Recall (Macro): %.4f\n", test_rec), file = log_file_glmnet, append = TRUE)
+cat(sprintf("Test Macro F1: %.4f\n", test_f1), file = log_file_glmnet, append = TRUE)
+
+# Log to console
+cat("\n=== TEST SET PERFORMANCE ===\n")
+cat(sprintf("Test Accuracy: %.4f\n", test_acc))
+cat(sprintf("Test Precision (Macro): %.4f\n", test_prec))
+cat(sprintf("Test Recall (Macro): %.4f\n", test_rec))
+cat(sprintf("Test Macro F1: %.4f\n", test_f1))
+
+t_all_end_glmnet <- Sys.time()
+total_time_glmnet <- as.numeric(difftime(t_all_end_glmnet, t_all_start_glmnet, units = "secs"))
+
+cat(sprintf("\n[%s] Complete! Total time: %.1f sec (%.1f min)\n",
+            format(Sys.time(), "%H:%M:%S"), total_time_glmnet, total_time_glmnet/60))
+cat(sprintf("\n[%s] Complete! Total time: %.1f sec (%.1f min)\n",
+            format(Sys.time(), "%H:%M:%S"), total_time_glmnet, total_time_glmnet/60),
+    file = log_file_glmnet, append = TRUE)
+
+cat("\n[INFO] Optimization time:", round(as.numeric(difftime(t_train_end_glmnet, t_train_start_glmnet, units="secs")),2), "sec\n")
+cat("[INFO] Total pipeline time:", round(total_time_glmnet, 2), "sec\n")
+
+# Cleanup parallel cluster
+stopCluster(cl_glmnet)
+registerDoSEQ()
+
+```
+
+
+## SVM (Support Vector Machine)
+
+```{r, message=FALSE, warning=FALSE}
+
+# ----Packages and setup----
+
+need_svm <- c("dplyr", "e1071", "doParallel", "foreach")
+miss_svm <- setdiff(need_svm, rownames(installed.packages()))
+if (length(miss_svm)) install.packages(miss_svm, dependencies = TRUE)
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(e1071)
+  library(doParallel)
+  library(foreach)
+})
+
+set.seed(5003)
+t_all_start_svm <- Sys.time()
+
+DATA_PATH_SVM <- "final_cleaned_policy_focused.csv"
+
+# ----Load and preprocess data----
+
+dat_raw_svm <- read.csv(DATA_PATH_SVM, stringsAsFactors = FALSE)
+cat("[INFO] Loaded:", nrow(dat_raw_svm), "rows,", ncol(dat_raw_svm), "columns\n")
+
+# Feature selection (using subset of features for SVM efficiency)
+selected_features_svm <- c(
+  "STOP_STARTHR",
+  "STOP_TRAVTIME",
+  "STOP_ORIGPURP1",
+  "PERS_AGEGROUP",
+  "PERS_CARLICENCE",
+  "HH_TOTALVEHS",
+  "HH_HHINC",
+  "STOP_MAINMODE"
+)
+
+df_svm <- dplyr::select(dat_raw_svm, dplyr::all_of(selected_features_svm))
+
+# Remove rows with missing target
+df_svm <- df_svm[!is.na(df_svm$STOP_MAINMODE), ]
+
+# Convert character to factor
+char_cols <- sapply(df_svm, is.character)
+df_svm[char_cols] <- lapply(df_svm[char_cols], factor)
+
+# Ensure target is factor with valid names
+df_svm$STOP_MAINMODE <- as.factor(df_svm$STOP_MAINMODE)
+levels(df_svm$STOP_MAINMODE) <- make.names(levels(df_svm$STOP_MAINMODE))
+
+# Impute missing values
+for (col in names(df_svm)) {
+  if (col == "STOP_MAINMODE") next
+
+  if (is.numeric(df_svm[[col]])) {
+    na_idx <- is.na(df_svm[[col]])
+    if (any(na_idx)) {
+      df_svm[[col]][na_idx] <- median(df_svm[[col]], na.rm = TRUE)
+    }
+  } else if (is.factor(df_svm[[col]])) {
+    na_idx <- is.na(df_svm[[col]])
+    if (any(na_idx)) {
+      mode_val <- names(sort(table(df_svm[[col]]), decreasing = TRUE))[1]
+      df_svm[[col]][na_idx] <- mode_val
+    }
+  }
+}
+
+cat("[INFO] Classes:", length(levels(df_svm$STOP_MAINMODE)), "\n")
+
+# ----Train/test split (stratified)----
+
+set.seed(5003)
+split_ratio <- 0.8
+train_idx_svm <- unlist(tapply(seq_len(nrow(df_svm)), df_svm$STOP_MAINMODE, function(ix) {
+  sample(ix, size = floor(length(ix) * split_ratio))
+}))
+
+train_svm <- df_svm[train_idx_svm, , drop = FALSE]
+test_svm  <- df_svm[-train_idx_svm, , drop = FALSE]
+
+cat("[INFO] Split:", nrow(train_svm), "train,", nrow(test_svm), "test\n")
+
+# ----Design Matrix (One-Hot Encoding) & Scaling----
+
+form_svm <- as.formula("STOP_MAINMODE ~ .")
+
+X_train_svm <- model.matrix(form_svm, data = train_svm)[, -1, drop = FALSE]
+X_test_svm  <- model.matrix(form_svm, data = test_svm)[, -1, drop = FALSE]
+
+y_train_svm <- train_svm$STOP_MAINMODE
+y_test_svm  <- test_svm$STOP_MAINMODE
+
+# Scale numeric columns
+num_idx_svm <- which(apply(X_train_svm, 2, is.numeric))
+center_svm <- colMeans(X_train_svm[, num_idx_svm, drop = FALSE])
+scale_sd_svm <- apply(X_train_svm[, num_idx_svm, drop = FALSE], 2, sd)
+scale_sd_svm[scale_sd_svm == 0] <- 1
+
+X_train_svm[, num_idx_svm] <- scale(X_train_svm[, num_idx_svm, drop = FALSE],
+                                      center = center_svm, scale = scale_sd_svm)
+X_test_svm[,  num_idx_svm] <- scale(X_test_svm[,  num_idx_svm, drop = FALSE],
+                                      center = center_svm, scale = scale_sd_svm)
+
+cat("[INFO] Encoded dims - train:", nrow(X_train_svm), "x", ncol(X_train_svm),
+    "; test:", nrow(X_test_svm), "x", ncol(X_test_svm), "\n")
+
+# ----Parallel setup----
+
+n_cores_svm <- max(1, parallel::detectCores() - 1)
+cl_svm <- makeCluster(n_cores_svm)
+registerDoParallel(cl_svm)
+cat("[INFO] Parallel cluster registered with", n_cores_svm, "workers\n\n")
+
+# ----Hyperparameter tuning (Parallel Grid Search with 5-fold CV)----
+
+set.seed(5003)
+p_svm <- ncol(X_train_svm)
+
+# Macro F1 calculation
+calc_macro_f1_svm <- function(predicted, actual) {
+  classes <- union(levels(predicted), levels(actual))
+  classes <- classes[!is.na(classes)]
+
+  f1_scores <- numeric(length(classes))
+  for (i in seq_along(classes)) {
+    cl <- classes[i]
+    tp <- sum(predicted == cl & actual == cl)
+    fp <- sum(predicted == cl & actual != cl)
+    fn <- sum(predicted != cl & actual == cl)
+
+    prec <- ifelse((tp + fp) == 0, 0, tp / (tp + fp))
+    rec  <- ifelse((tp + fn) == 0, 0, tp / (tp + fn))
+    f1_scores[i] <- ifelse((prec + rec) == 0, 0, 2 * prec * rec / (prec + rec))
+  }
+
+  return(mean(f1_scores, na.rm = TRUE))
+}
+
+# Parameter grid
+tune_grid_cost_svm  <- c(0.5, 1, 2, 4)
+tune_grid_gamma_svm <- (1 / p_svm) * c(0.5, 1, 2)
+param_grid_svm <- expand.grid(cost = tune_grid_cost_svm, gamma = tune_grid_gamma_svm)
+
+cat("[INFO] Parallel SVM tuning with 5-fold CV, optimizing for Macro F1\n")
+cat(sprintf("[INFO] Grid search: %d combinations\n\n", nrow(param_grid_svm)))
+
+# Create 5-fold CV indices
+set.seed(5003)
+n_folds_svm <- 5
+fold_indices_svm <- sample(rep(1:n_folds_svm, length.out = nrow(X_train_svm)))
+
+# Parallel grid search
+t_train_start_svm <- Sys.time()
+grid_results_svm <- foreach(i = 1:nrow(param_grid_svm),
+                            .combine = rbind,
+                            .packages = c("e1071"),
+                            .export = c("X_train_svm", "y_train_svm", "fold_indices_svm", "calc_macro_f1_svm")) %dopar% {
+
+  cost_val <- param_grid_svm$cost[i]
+  gamma_val <- param_grid_svm$gamma[i]
+
+  fold_f1 <- numeric(n_folds_svm)
+  for (fold in 1:n_folds_svm) {
+    train_idx <- which(fold_indices_svm != fold)
+    val_idx <- which(fold_indices_svm == fold)
+
+    svm_model <- e1071::svm(
+      x = X_train_svm[train_idx, , drop = FALSE],
+      y = y_train_svm[train_idx],
+      kernel = "radial",
+      cost = cost_val,
+      gamma = gamma_val
+    )
+
+    pred <- predict(svm_model, newdata = X_train_svm[val_idx, , drop = FALSE])
+    fold_f1[fold] <- calc_macro_f1_svm(pred, y_train_svm[val_idx])
+  }
+
+  data.frame(
+    cost = cost_val,
+    gamma = gamma_val,
+    mean_macro_f1 = mean(fold_f1),
+    sd_macro_f1 = sd(fold_f1)
+  )
+}
+
+t_train_end_svm <- Sys.time()
+elapsed_svm <- as.numeric(difftime(t_train_end_svm, t_train_start_svm, units = "secs"))
+cat(sprintf("\n[TIMING] Grid search completed in %.1f seconds\n\n", elapsed_svm))
+
+# Best parameters
+best_idx_svm <- which.max(grid_results_svm$mean_macro_f1)
+best_cost_svm <- grid_results_svm$cost[best_idx_svm]
+best_gamma_svm <- grid_results_svm$gamma[best_idx_svm]
+best_f1_cv_svm <- grid_results_svm$mean_macro_f1[best_idx_svm]
+
+cat("[Best params]\n")
+cat(sprintf("  cost:  %.2f\n", best_cost_svm))
+cat(sprintf("  gamma: %.6f\n", best_gamma_svm))
+cat(sprintf("  CV Macro F1: %.4f (±%.4f)\n\n", best_f1_cv_svm, grid_results_svm$sd_macro_f1[best_idx_svm]))
+
+# ----Train final model----
+
+cat("[INFO] Training final SVM model on full training set\n\n")
+
+svm_fit <- e1071::svm(
+  x = X_train_svm, y = y_train_svm,
+  kernel = "radial",
+  cost = best_cost_svm,
+  gamma = best_gamma_svm,
+  probability = TRUE
+)
+
+# ----Test evaluation----
+
+pred_svm <- predict(svm_fit, newdata = X_test_svm, probability = TRUE)
+cm_svm <- table(Predicted = pred_svm, Actual = y_test_svm)
+
+# Metrics
+accuracy_svm <- sum(diag(cm_svm)) / sum(cm_svm)
+
+classes_svm <- union(rownames(cm_svm), colnames(cm_svm))
+classes_svm <- classes_svm[!is.na(classes_svm)]
+
+prec_svm <- rec_svm <- f1_svm <- setNames(numeric(length(classes_svm)), classes_svm)
+
+for (cl in classes_svm) {
+  tp <- cm_svm[cl, cl]
+  fp <- sum(cm_svm[cl, ]) - tp
+  fn <- sum(cm_svm[, cl]) - tp
+  prec_svm[cl] <- ifelse((tp + fp) == 0, NA, tp / (tp + fp))
+  rec_svm[cl]  <- ifelse((tp + fn) == 0, NA, tp / (tp + fn))
+  f1_svm[cl]   <- ifelse(is.na(prec_svm[cl]) | is.na(rec_svm[cl]) | (prec_svm[cl] + rec_svm[cl]) == 0, NA,
+                         2 * prec_svm[cl] * rec_svm[cl] / (prec_svm[cl] + rec_svm[cl]))
+}
+
+macro_precision_svm <- mean(prec_svm, na.rm = TRUE)
+macro_recall_svm    <- mean(rec_svm,  na.rm = TRUE)
+macro_f1_svm        <- mean(f1_svm,   na.rm = TRUE)
+
+# Output in consistent format
+cat("\n[Final Test Metrics]\n")
+cat(sprintf("Accuracy       : %.4f\n", accuracy_svm))
+cat(sprintf("Macro Precision: %.4f\n", macro_precision_svm))
+cat(sprintf("Macro Recall   : %.4f\n", macro_recall_svm))
+cat(sprintf("Macro F1       : %.4f\n", macro_f1_svm))
+
+t_all_end_svm <- Sys.time()
+cat("\n[INFO] Training time:", round(elapsed_svm, 2), "sec\n")
+cat("[INFO] Total pipeline time:", round(as.numeric(difftime(t_all_end_svm, t_all_start_svm, units="secs")), 2), "sec\n")
+
+# Cleanup
+stopCluster(cl_svm)
+registerDoSEQ()
+
+```
+
+
+## Decision Tree
+```{r, message=FALSE, warning=FALSE}
+
+# ----Packages and setup----
+
+libs <- c("tidyverse","caret","rpart","rpart.plot")
+to_install <- libs[!libs %in% installed.packages()[,1]]
+if(length(to_install)) install.packages(to_install, dependencies = TRUE)
+invisible(lapply(libs, library, character.only = TRUE))
+set.seed(5003)  # Aligned seed for reproducibility
+
+t_all_start <- Sys.time()
+
+# ----Load data----
+
+data_path <- "final_cleaned_policy_focused.csv"
+df <- read.csv(data_path, stringsAsFactors = FALSE)
+cat("[INFO] Loaded:", nrow(df), "rows,", ncol(df), "columns\n")
+
+if ("STOPID" %in% names(df)) df$STOPID <- NULL
+stop_var <- "STOP_MAINMODE"
+if (!stop_var %in% names(df)) stop("STOP_MAINMODE not found")
+df[[stop_var]] <- as.factor(df[[stop_var]])
+
+char_cols <- names(df)[sapply(df, is.character)]
+char_cols <- setdiff(char_cols, stop_var)
+if (length(char_cols)) {
+  df[char_cols] <- lapply(df[char_cols], factor)
+  cat("[INFO] Converted to factor:", paste(char_cols, collapse=", "), "\n")
+}
+
+# ----Train/Test split----
+
+idx <- createDataPartition(df[[stop_var]], p = 0.8, list = FALSE)
+train_df <- df[idx, , drop = FALSE]
+test_df  <- df[-idx, , drop = FALSE]
+cat("[INFO] Split:", nrow(train_df), "train,", nrow(test_df), "test\n")
+
+test_df[[stop_var]] <- factor(test_df[[stop_var]], levels = levels(train_df[[stop_var]]))
+
+# ----One-hot encoding----
+
+x_cols <- setdiff(names(train_df), stop_var)
+dv <- dummyVars(as.formula(paste(stop_var, "~ .")), data = train_df, fullRank = TRUE)
+train_x_enc <- as.data.frame(predict(dv, newdata = train_df))
+test_x_enc  <- as.data.frame(predict(dv, newdata = test_df))
+cat("[INFO] Encoded dims - train:", nrow(train_x_enc), "x", ncol(train_x_enc),
+    "; test:", nrow(test_x_enc), "x", ncol(test_x_enc), "\n")
+
+# ----Metrics----
+
+macro_metrics <- function(obs, pred) {
+  valid <- !is.na(obs) & !is.na(pred)
+  if(sum(valid) == 0) return(c(Accuracy=0, MacroPrecision=0, MacroRecall=0, MacroF1=0))
+  obs <- factor(obs[valid])
+  pred <- factor(pred[valid], levels = levels(obs))
+  lev <- levels(obs)
+  per_class <- lapply(lev, function(l) {
+    tp <- sum(obs == l & pred == l)
+    fp <- sum(obs != l & pred == l)
+    fn <- sum(obs == l & pred != l)
+    precision <- ifelse(tp + fp == 0, 0, tp / (tp + fp))
+    recall <- ifelse(tp + fn == 0, 0, tp / (tp + fn))
+    f1 <- ifelse(precision + recall == 0, 0, 2 * precision * recall / (precision + recall))
+    c(precision, recall, f1)
+  })
+  per_class <- do.call(rbind, per_class)
+  acc <- mean(obs == pred)
+  c(Accuracy = acc,
+    MacroPrecision = mean(per_class[,1]),
+    MacroRecall = mean(per_class[,2]),
+    MacroF1 = mean(per_class[,3]))
+}
+summary_fun <- function(data, lev=NULL, model=NULL) macro_metrics(data$obs, data$pred)
+
+# ----Bayesian optimization----
+
+library(ParBayesianOptimization)
+
+# Note: Using sequential CV for Decision Tree (faster than parallel due to low overhead)
+
+# Create optimization log file first
+log_file_dt <- "decision_tree_optimization.log"
+cat("=== Decision Tree Bayesian Optimization Progress ===\n", file = log_file_dt)
+cat(sprintf("Started: %s\n\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S")), file = log_file_dt, append = TRUE)
+cat("[INFO] Bayesian optimization: 22 iterations (5 initial + 17 Bayesian)\n", file = log_file_dt, append = TRUE)
+cat("Optimizing: Macro F1 score via 5-fold CV\n\n", file = log_file_dt, append = TRUE)
+
+# Counter for iteration tracking
+iteration_counter_dt <- 0
+start_time_global_dt <- Sys.time()
+
+# Create folds once (reuse across all iterations)
+set.seed(5003)
+folds_dt <- createFolds(train_df[[stop_var]], k = 5, list = TRUE)
+
+# Define objective function for Bayesian optimization
+dt_cv_bayes <- function(cp, maxdepth, minsplit, minbucket) {
+  iteration_counter_dt <<- iteration_counter_dt + 1
+  iter_start <- Sys.time()
+
+  # Round integer parameters
+  maxdepth <- round(maxdepth)
+  minsplit <- round(minsplit)
+  minbucket <- round(minbucket)
+
+  # Ensure minbucket <= minsplit/3 (rpart constraint)
+  minbucket <- min(minbucket, floor(minsplit / 3))
+
+  # Log iteration start
+  cat(sprintf("\n[%s] Starting Iteration %2d/22 (5 init + 17 Bayes)...\n",
+              format(Sys.time(), "%H:%M:%S"), iteration_counter_dt),
+      file = log_file_dt, append = TRUE)
+
+  # Sequential 5-fold CV (faster than parallel for Decision Trees)
+  cv_results <- matrix(0, nrow = 5, ncol = 4)
+  colnames(cv_results) <- c("Accuracy", "MacroPrecision", "MacroRecall", "MacroF1")
+
+  for (fold_idx in 1:5) {
+    val_idx <- folds_dt[[fold_idx]]
+    train_idx <- setdiff(1:nrow(train_x_enc), val_idx)
+
+    # Train Decision Tree
+    model <- rpart::rpart(
+      train_df[[stop_var]][train_idx] ~ .,
+      data = as.data.frame(train_x_enc[train_idx, ]),
+      method = "class",
+      control = rpart.control(
+        cp = cp,
+        maxdepth = maxdepth,
+        minsplit = minsplit,
+        minbucket = minbucket,
+        xval = 0
+      )
+    )
+
+    # Predict on validation fold
+    pred_val <- predict(model, as.data.frame(train_x_enc[val_idx, ]), type = "class")
+    actual_val <- train_df[[stop_var]][val_idx]
+
+    # Calculate metrics
+    metrics <- macro_metrics(actual_val, pred_val)
+
+    cv_results[fold_idx, ] <- c(metrics["Accuracy"],
+                                 metrics["MacroPrecision"],
+                                 metrics["MacroRecall"],
+                                 metrics["MacroF1"])
+  }
+
+  # Average across folds
+  avg_acc <- mean(cv_results[, "Accuracy"])
+  avg_prec <- mean(cv_results[, "MacroPrecision"])
+  avg_rec <- mean(cv_results[, "MacroRecall"])
+  avg_f1 <- mean(cv_results[, "MacroF1"])
+
+  # Log results
+  cat(sprintf("  5-Fold CV: Acc=%.4f | Prec=%.4f | Rec=%.4f | MacroF1=%.4f\n",
+              avg_acc, avg_prec, avg_rec, avg_f1),
+      file = log_file_dt, append = TRUE)
+  cat(sprintf("  Params: cp=%.6f, maxdepth=%d, minsplit=%d, minbucket=%d\n",
+              cp, maxdepth, minsplit, minbucket),
+      file = log_file_dt, append = TRUE)
+
+  # Time tracking
+  iter_time <- as.numeric(difftime(Sys.time(), iter_start, units = "secs"))
+  total_elapsed <- as.numeric(difftime(Sys.time(), start_time_global_dt, units = "secs"))
+  avg_time <- total_elapsed / iteration_counter_dt
+  remaining <- avg_time * (22 - iteration_counter_dt)
+
+  cat(sprintf("  Time: Iter=%.1fs | Total=%02d:%02d | ETA=%02d:%02d\n",
+              iter_time,
+              floor(total_elapsed/60), floor(total_elapsed) %% 60,
+              floor(remaining/60), floor(remaining) %% 60),
+      file = log_file_dt, append = TRUE)
+
+  list(Score = avg_f1)
+}
+
+cat("[INFO] Starting Bayesian optimization for Decision Tree...\n")
+
+t_train_start <- Sys.time()
+
+bayes_out_dt <- bayesOpt(
+  FUN = dt_cv_bayes,
+  bounds = list(
+    cp = c(0.0001, 0.1),
+    maxdepth = c(5L, 30L),
+    minsplit = c(10L, 50L),
+    minbucket = c(5L, 25L)
+  ),
+  initPoints = 5,
+  iters.n = 17,
+  acq = "ucb",
+  kappa = 2.576,
+  verbose = 0
+)
+
+t_train_end <- Sys.time()
+
+best_params_dt <- getBestPars(bayes_out_dt)
+best_score_dt <- max(bayes_out_dt$scoreSummary$Score)
+
+# Log final summary
+cat(sprintf("\n=== OPTIMIZATION COMPLETE ===\n"), file = log_file_dt, append = TRUE)
+cat(sprintf("Best iteration: %d/22\n", which.max(bayes_out_dt$scoreSummary$Score)),
+    file = log_file_dt, append = TRUE)
+cat(sprintf("Best Macro F1: %.4f\n", best_score_dt), file = log_file_dt, append = TRUE)
+cat(sprintf("Best params: cp=%.6f, maxdepth=%d, minsplit=%d, minbucket=%d\n",
+            best_params_dt$cp,
+            round(best_params_dt$maxdepth),
+            round(best_params_dt$minsplit),
+            round(best_params_dt$minbucket)),
+    file = log_file_dt, append = TRUE)
+cat(sprintf("Optimization time: %.1f sec\n", as.numeric(difftime(t_train_end, t_train_start, units="secs"))),
+    file = log_file_dt, append = TRUE)
+
+# ----Display output----
+
+cat("\n[Best CV Macro F1]:", best_score_dt, "\n")
+cat("[Best Params]\n")
+print(best_params_dt)
+
+# ----Train final model with best params----
+
+final_model_dt <- rpart::rpart(
+  train_df[[stop_var]] ~ .,
+  data = as.data.frame(train_x_enc),
+  method = "class",
+  control = rpart.control(
+    cp = best_params_dt$cp,
+    maxdepth = round(best_params_dt$maxdepth),
+    minsplit = round(best_params_dt$minsplit),
+    minbucket = round(best_params_dt$minbucket),
+    xval = 0
+  )
+)
+
+# ----Test evaluation----
+
+test_pred <- predict(final_model_dt, as.data.frame(test_x_enc), type = "class")
+te <- macro_metrics(test_df[[stop_var]], test_pred)
+
+# Log to file
+cat(sprintf("\n=== TEST SET PERFORMANCE ===\n"), file = log_file_dt, append = TRUE)
+cat(sprintf("Test Accuracy: %.4f\n", te["Accuracy"]), file = log_file_dt, append = TRUE)
+cat(sprintf("Test Precision (Macro): %.4f\n", te["MacroPrecision"]), file = log_file_dt, append = TRUE)
+cat(sprintf("Test Recall (Macro): %.4f\n", te["MacroRecall"]), file = log_file_dt, append = TRUE)
+cat(sprintf("Test Macro F1: %.4f\n", te["MacroF1"]), file = log_file_dt, append = TRUE)
+
+# Log to console
+cat("\n=== TEST SET PERFORMANCE ===\n")
+cat(sprintf("Test Accuracy: %.4f\n", te["Accuracy"]))
+cat(sprintf("Test Precision (Macro): %.4f\n", te["MacroPrecision"]))
+cat(sprintf("Test Recall (Macro): %.4f\n", te["MacroRecall"]))
+cat(sprintf("Test Macro F1: %.4f\n", te["MacroF1"]))
+
+t_all_end <- Sys.time()
+total_time_dt <- as.numeric(difftime(t_all_end, t_all_start, units = "secs"))
+
+cat(sprintf("\n[%s] Complete! Total time: %.1f sec (%.1f min)\n",
+            format(Sys.time(), "%H:%M:%S"), total_time_dt, total_time_dt/60))
+cat(sprintf("\n[%s] Complete! Total time: %.1f sec (%.1f min)\n",
+            format(Sys.time(), "%H:%M:%S"), total_time_dt, total_time_dt/60),
+    file = log_file_dt, append = TRUE)
+
+cat("\n[INFO] Total pipeline time:", round(total_time_dt, 2), "sec\n")
+
+# Stop parallel cluster
+stopCluster(cl_dt)
+registerDoSEQ()
+
+```
+
+
+## XGBoost
+```{r, message=FALSE, warning=FALSE}
+
+# ----Packages and setup----
+
+libs <- c("xgboost","caret","Matrix","dplyr","ParBayesianOptimization")
+to_install <- libs[!libs %in% installed.packages()[,1]]
+if(length(to_install)) install.packages(to_install, dependencies = TRUE)
+invisible(lapply(libs, library, character.only = TRUE))
+set.seed(5003)
+
+t_all_start <- Sys.time()
+
+# ----Load data----
+
+data_path <- "final_cleaned_policy_focused.csv"
+df <- read.csv(data_path, stringsAsFactors = FALSE)
+cat("[INFO] Loaded:", nrow(df), "rows,", ncol(df), "columns\n")
+
+if ("STOPID" %in% names(df)) df$STOPID <- NULL
+stop_var <- "STOP_MAINMODE"
+if (!stop_var %in% names(df)) stop("STOP_MAINMODE not found")
+df[[stop_var]] <- as.factor(df[[stop_var]])
+
+char_cols <- names(df)[sapply(df, is.character)]
+char_cols <- setdiff(char_cols, stop_var)
+if (length(char_cols)) {
+  df[char_cols] <- lapply(df[char_cols], factor)
+}
+
+# ----Train/Test split----
+
+idx <- createDataPartition(df[[stop_var]], p = 0.8, list = FALSE)
+train_df <- df[idx, , drop = FALSE]
+test_df  <- df[-idx, , drop = FALSE]
+cat("[INFO] Split:", nrow(train_df), "train,", nrow(test_df), "test\n")
+
+# ----Mixed encoding (target + one-hot)----
+
+target_encode <- function(train_vec, test_vec, train_y, global_mean) {
+  enc_map <- tapply(train_y, train_vec, mean, na.rm = TRUE)
+  train_enc <- enc_map[as.character(train_vec)]
+  test_enc <- enc_map[as.character(test_vec)]
+  train_enc[is.na(train_enc)] <- global_mean
+  test_enc[is.na(test_enc)] <- global_mean
+  list(train = train_enc, test = test_enc)
+}
+
+num_cols <- names(train_df)[sapply(train_df, is.numeric) & names(train_df) != stop_var]
+cat_cols <- names(train_df)[sapply(train_df, function(x) is.character(x) || is.factor(x))]
+cat_cols <- setdiff(cat_cols, stop_var)
+
+cardinality <- sapply(train_df[cat_cols], function(x) {
+  if (is.factor(x)) length(levels(x)) else length(unique(x))
+})
+high_card <- names(cardinality)[cardinality > 50]
+low_card <- names(cardinality)[cardinality <= 50]
+
+cat(sprintf("[INFO] Encoding: %d high-card (target), %d low-card (one-hot)\n",
+            length(high_card), length(low_card)))
+
+train_enc_list <- list()
+test_enc_list <- list()
+target_num <- as.numeric(train_df[[stop_var]]) - 1
+global_mean <- mean(target_num, na.rm = TRUE)
+
+if (length(high_card) > 0) {
+  for (col in high_card) {
+    enc <- target_encode(train_df[[col]], test_df[[col]], target_num, global_mean)
+    train_enc_list[[paste0(col, "_te")]] <- enc$train
+    test_enc_list[[paste0(col, "_te")]] <- enc$test
+  }
+}
+
+if (length(low_card) > 0) {
+  for (col in low_card) {
+    train_df[[col]] <- as.factor(train_df[[col]])
+    test_df[[col]] <- as.factor(test_df[[col]])
+  }
+
+  train_mat <- model.matrix(~ . - 1, data = train_df[, low_card, drop = FALSE])
+  test_mat <- model.matrix(~ . - 1, data = test_df[, low_card, drop = FALSE])
+
+  missing <- setdiff(colnames(train_mat), colnames(test_mat))
+  if (length(missing) > 0) {
+    for (m in missing) {
+      test_mat <- cbind(test_mat, 0)
+      colnames(test_mat)[ncol(test_mat)] <- m
+    }
+  }
+  test_mat <- test_mat[, colnames(train_mat)]
+
+  for (i in 1:ncol(train_mat)) {
+    train_enc_list[[colnames(train_mat)[i]]] <- train_mat[, i]
+    test_enc_list[[colnames(train_mat)[i]]] <- test_mat[, i]
+  }
+}
+
+train_final <- train_df[, c(num_cols, stop_var), drop = FALSE]
+test_final <- test_df[, c(num_cols, stop_var), drop = FALSE]
+for (fn in names(train_enc_list)) {
+  train_final[[fn]] <- train_enc_list[[fn]]
+  test_final[[fn]] <- test_enc_list[[fn]]
+}
+
+cat(sprintf("[INFO] Final features: %d\n", ncol(train_final) - 1))
+
+# ----Prepare XGBoost data----
+
+X_train <- as.matrix(train_final[, setdiff(names(train_final), stop_var)])
+y_train <- as.numeric(train_final[[stop_var]]) - 1
+X_test <- as.matrix(test_final[, setdiff(names(test_final), stop_var)])
+y_test <- as.numeric(test_final[[stop_var]]) - 1
+
+# Calculate class weights for imbalanced data
+class_counts <- table(y_train)
+n_samples <- length(y_train)
+n_classes <- length(class_counts)
+class_weights <- n_samples / (n_classes * class_counts)
+class_weights <- as.numeric(class_weights)
+
+# Assign weights to each sample based on its class
+sample_weights <- class_weights[y_train + 1]
+
+dtrain <- xgb.DMatrix(data = X_train, label = y_train, weight = sample_weights)
+dtest <- xgb.DMatrix(data = X_test, label = y_test)
+
+# ----Bayesian optimization with parallel CV----
+
+suppressPackageStartupMessages({
+  library(foreach)
+  library(doParallel)
+})
+
+set.seed(5003)
+folds <- createFolds(y_train, k = 5, list = TRUE)
+
+# Setup parallel processing
+n_cores_total <- parallel::detectCores() - 1
+n_cv_folds <- 5
+n_cores_per_fold <- max(1, floor(n_cores_total / n_cv_folds))
+
+# Setup parallel cluster for CV folds
+cl <- makeCluster(n_cv_folds)
+registerDoParallel(cl)
+
+# Define custom Macro F1 evaluation metric for XGBoost
+# XGBoost eval functions: f(preds, dtrain) -> list(metric_name, value)
+# Higher Macro F1 = better, so we return negative value for minimization
+macro_f1_eval <- function(preds, dtrain) {
+  labels <- getinfo(dtrain, "label")
+
+  # Reshape predictions to class probabilities
+  num_class <- length(preds) / length(labels)
+  preds_matrix <- matrix(preds, ncol = num_class, byrow = TRUE)
+  pred_class <- max.col(preds_matrix) - 1
+
+  # Calculate per-class F1
+  all_classes <- 0:(num_class - 1)
+  f1_per_class <- sapply(all_classes, function(l) {
+    tp <- sum(labels == l & pred_class == l)
+    fp <- sum(labels != l & pred_class == l)
+    fn <- sum(labels == l & pred_class != l)
+    precision <- ifelse(tp + fp > 0, tp / (tp + fp), 0)
+    recall <- ifelse(tp + fn > 0, tp / (tp + fn), 0)
+    ifelse(precision + recall > 0, 2 * precision * recall / (precision + recall), 0)
+  })
+
+  macro_f1 <- mean(f1_per_class, na.rm = TRUE)
+
+  # Return negative because XGBoost minimizes custom metrics
+  return(list(metric = "macro_f1", value = -macro_f1))
+}
+
+# Create optimization log
+log_file_xgb <- "xgboost_optimization.log"
+cat("=== Bayesian Optimization Progress Log ===\n", file = log_file_xgb)
+cat(sprintf("Started: %s\n\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S")), file = log_file_xgb, append = TRUE)
+cat("[INFO] Bayesian optimization: 22 iterations (7 initial + 15 Bayesian)\n", file = log_file_xgb, append = TRUE)
+cat("Optimizing: Macro F1 score via 5-fold CV\n\n", file = log_file_xgb, append = TRUE)
+
+# Counter for iteration tracking
+iteration_counter <- 0
+start_time_global <- Sys.time()
+
+xgb_cv_bayes <- function(max_depth, eta, subsample, colsample_bytree, min_child_weight, gamma) {
+  iteration_counter <<- iteration_counter + 1
+  iter_start <- Sys.time()
+
+  max_depth <- round(max_depth)
+
+  # Wrap in tryCatch to log errors
+  result <- tryCatch({
+
+  params <- list(
+    objective = "multi:softprob",
+    num_class = length(unique(y_train)),
+    max_depth = max_depth,
+    eta = eta,
+    subsample = subsample,
+    colsample_bytree = colsample_bytree,
+    min_child_weight = min_child_weight,
+    gamma = gamma,
+    nthread = n_cores_per_fold,
+    seed = 5003  # Ensures reproducibility (XGBoost ignores R's set.seed)
+  )
+
+  # Log iteration start
+  cat(sprintf("\n[%s] Starting Iteration %2d/22...\n",
+              format(Sys.time(), "%H:%M:%S"), iteration_counter),
+      file = log_file_xgb, append = TRUE)
+
+  cv_start <- Sys.time()
+
+  # Parallel CV across folds - collect detailed metrics
+  cv_results <- foreach(fold_idx = 1:5, .packages = c("xgboost"),
+                        .combine = rbind, .export = c("folds", "X_train", "y_train", "sample_weights", "macro_f1_eval", "params")) %dopar% {
+    val_idx <- folds[[fold_idx]]
+    train_idx <- setdiff(1:nrow(X_train), val_idx)
+
+    dtrain_cv <- xgb.DMatrix(data = X_train[train_idx, ], label = y_train[train_idx],
+                             weight = sample_weights[train_idx])
+    dval_cv <- xgb.DMatrix(data = X_train[val_idx, ], label = y_train[val_idx])
+
+    model_cv <- xgb.train(
+      params = params,
+      data = dtrain_cv,
+      nrounds = 100,
+      watchlist = list(train = dtrain_cv, val = dval_cv),
+      early_stopping_rounds = 10,
+      verbose = 0,
+      feval = macro_f1_eval
+    )
+
+    # Validation metrics
+    pred_val <- predict(model_cv, dval_cv, reshape = TRUE)
+    pred_val_class <- max.col(pred_val) - 1
+    val_acc <- mean(pred_val_class == y_train[val_idx])
+
+    # Training metrics
+    pred_train <- predict(model_cv, dtrain_cv, reshape = TRUE)
+    pred_train_class <- max.col(pred_train) - 1
+    train_acc <- mean(pred_train_class == y_train[train_idx])
+
+    # Macro F1 for validation
+    all_classes <- sort(unique(y_train))
+    val_f1_per_class <- sapply(all_classes, function(l) {
+      tp <- sum(y_train[val_idx] == l & pred_val_class == l)
+      fp <- sum(y_train[val_idx] != l & pred_val_class == l)
+      fn <- sum(y_train[val_idx] == l & pred_val_class != l)
+      pr <- ifelse(tp + fp > 0, tp / (tp + fp), 0)
+      re <- ifelse(tp + fn > 0, tp / (tp + fn), 0)
+      ifelse(pr + re > 0, 2 * pr * re / (pr + re), 0)
+    })
+    val_f1 <- mean(val_f1_per_class, na.rm = TRUE)
+    val_recalls <- sapply(all_classes, function(l) {
+      tp <- sum(y_train[val_idx] == l & pred_val_class == l)
+      fn <- sum(y_train[val_idx] == l & pred_val_class != l)
+      ifelse(tp + fn > 0, tp / (tp + fn), 0)
+    })
+
+    # Macro F1 for training
+    train_f1_per_class <- sapply(all_classes, function(l) {
+      tp <- sum(y_train[train_idx] == l & pred_train_class == l)
+      fp <- sum(y_train[train_idx] != l & pred_train_class == l)
+      fn <- sum(y_train[train_idx] == l & pred_train_class != l)
+      pr <- ifelse(tp + fp > 0, tp / (tp + fp), 0)
+      re <- ifelse(tp + fn > 0, tp / (tp + fn), 0)
+      ifelse(pr + re > 0, 2 * pr * re / (pr + re), 0)
+    })
+    train_f1 <- mean(train_f1_per_class, na.rm = TRUE)
+
+    # Get mlogloss from model evaluation log
+    eval_log <- model_cv$evaluation_log
+    val_mlogloss <- eval_log$val_mlogloss[nrow(eval_log)]
+    train_mlogloss <- eval_log$train_mlogloss[nrow(eval_log)]
+
+    # Class diversity metrics
+    n_classes_pred <- length(unique(pred_val_class))
+    recall_range <- range(val_recalls * 100)
+    majority_pct <- max(table(pred_val_class)) / length(pred_val_class) * 100
+
+    c(val_mlogloss = val_mlogloss, val_acc = val_acc, val_f1 = val_f1,
+      train_mlogloss = train_mlogloss, train_acc = train_acc, train_f1 = train_f1,
+      n_classes_pred = n_classes_pred,
+      recall_min = recall_range[1], recall_max = recall_range[2],
+      majority_pct = majority_pct)
+  }
+
+  cv_time <- as.numeric(difftime(Sys.time(), cv_start, units = "secs"))
+
+  # Average across folds
+  avg_val_mlogloss <- mean(cv_results[, "val_mlogloss"])
+  avg_val_acc <- mean(cv_results[, "val_acc"])
+  avg_val_f1 <- mean(cv_results[, "val_f1"])
+  avg_train_mlogloss <- mean(cv_results[, "train_mlogloss"])
+  avg_train_acc <- mean(cv_results[, "train_acc"])
+  avg_train_f1 <- mean(cv_results[, "train_f1"])
+  avg_n_classes <- round(mean(cv_results[, "n_classes_pred"]))
+  avg_recall_min <- mean(cv_results[, "recall_min"])
+  avg_recall_max <- mean(cv_results[, "recall_max"])
+  avg_majority_pct <- mean(cv_results[, "majority_pct"])
+
+  # Calculate overfitting gaps
+  acc_gap <- (avg_train_acc - avg_val_acc) * 100
+  f1_gap <- (avg_train_f1 - avg_val_f1) * 100
+
+  # Log results in detailed format
+  cat(sprintf("  5-Fold CV (parallel): Done (%.1fs)\n\n", cv_time), file = log_file_xgb, append = TRUE)
+  cat(sprintf("  ✓ CV Results (5-fold average):\n"), file = log_file_xgb, append = TRUE)
+  cat(sprintf("    Validation: mlogloss=%.4f | Acc=%.2f%%%% | MacroF1=%.4f\n",
+              avg_val_mlogloss, avg_val_acc * 100, avg_val_f1),
+      file = log_file_xgb, append = TRUE)
+  cat(sprintf("    Training:   mlogloss=%.4f | Acc=%.2f%%%% | MacroF1=%.4f\n",
+              avg_train_mlogloss, avg_train_acc * 100, avg_train_f1),
+      file = log_file_xgb, append = TRUE)
+  cat(sprintf("    Overfitting gap: Acc=%.1f%%%% | F1=%.1f%%%%\n", acc_gap, f1_gap),
+      file = log_file_xgb, append = TRUE)
+  cat(sprintf("    Class diversity: %d/%d classes predicted | Recall range: [%.2f%%, %.2f%%]\n",
+              avg_n_classes, length(unique(y_train)), avg_recall_min, avg_recall_max),
+      file = log_file_xgb, append = TRUE)
+  cat(sprintf("    Majority class: %.1f%%%% of predictions\n", avg_majority_pct),
+      file = log_file_xgb, append = TRUE)
+
+  # Time tracking
+  iter_time <- as.numeric(difftime(Sys.time(), iter_start, units = "secs"))
+  total_elapsed <- as.numeric(difftime(Sys.time(), start_time_global, units = "secs"))
+  avg_time <- total_elapsed / iteration_counter
+  remaining <- avg_time * (22 - iteration_counter)
+
+  cat(sprintf("  Time: Iter=%.1fs | Total=%02d:%02d | ETA=%02d:%02d\n",
+              iter_time,
+              floor(total_elapsed/60), floor(total_elapsed) %% 60,
+              floor(remaining/60), floor(remaining) %% 60),
+      file = log_file_xgb, append = TRUE)
+
+  list(Score = avg_val_f1)
+
+  }, error = function(e) {
+    cat(sprintf("\n[ERROR] Iteration %d failed: %s\n", iteration_counter, e$message),
+        file = log_file_xgb, append = TRUE)
+    return(list(Score = 0))
+  })
+
+  return(result)
+}
+
+cat("[INFO] Starting Bayesian optimization (22 iterations total: 7 initial + 15 Bayesian)...\n")
+
+t_train_start <- Sys.time()
+
+bayes_out <- bayesOpt(
+  FUN = xgb_cv_bayes,
+  bounds = list(
+    max_depth = c(3L, 15L),           # Expanded from 10 to 15
+    eta = c(0.001, 0.5),              # Expanded from 0.3 to 0.5
+    subsample = c(0.5, 1.0),
+    colsample_bytree = c(0.5, 1.0),
+    min_child_weight = c(1L, 15L),    # Expanded from 10 to 15
+    gamma = c(0, 10)                  # Expanded from 5 to 10
+  ),
+  initPoints = 7,
+  iters.n = 15,
+  acq = "ucb",
+  kappa = 2.576,
+  verbose = 0  # Disable default verbose (using custom logging inside function)
+)
+
+best_params_bayes <- getBestPars(bayes_out)
+best_score <- max(bayes_out$scoreSummary$Score)
+
+# Log final summary
+cat(sprintf("\n=== OPTIMIZATION COMPLETE ===\n"), file = log_file_xgb, append = TRUE)
+cat(sprintf("Best iteration: %d/22\n", which.max(bayes_out$scoreSummary$Score)),
+    file = log_file_xgb, append = TRUE)
+cat(sprintf("Best Macro F1: %.4f\n", best_score), file = log_file_xgb, append = TRUE)
+cat(sprintf("Best params: depth=%d, eta=%.4f, subsample=%.2f, colsample=%.2f, child_wt=%.1f, gamma=%.2f\n",
+            round(best_params_bayes$max_depth),
+            best_params_bayes$eta,
+            best_params_bayes$subsample,
+            best_params_bayes$colsample_bytree,
+            best_params_bayes$min_child_weight,
+            best_params_bayes$gamma),
+    file = log_file_xgb, append = TRUE)
+
+cat(sprintf("\n[Best CV Macro F1]: %.4f\n", best_score))
+cat("[Best Params]\n")
+print(best_params_bayes)
+
+# ----Train final model----
+
+final_params <- list(
+  objective = "multi:softprob",
+  num_class = length(unique(y_train)),
+  max_depth = round(best_params_bayes$max_depth),
+  eta = best_params_bayes$eta,
+  subsample = best_params_bayes$subsample,
+  colsample_bytree = best_params_bayes$colsample_bytree,
+  min_child_weight = best_params_bayes$min_child_weight,
+  gamma = best_params_bayes$gamma,
+  seed = 5003  # Ensures reproducibility (XGBoost ignores R's set.seed)
+)
+
+final_model <- xgb.train(
+  params = final_params,
+  data = dtrain,
+  nrounds = 100,
+  watchlist = list(train = dtrain),
+  early_stopping_rounds = 10,
+  verbose = 0,
+  feval = macro_f1_eval
+)
+
+t_train_end <- Sys.time()
+
+# ----Test evaluation----
+
+pred_prob <- predict(final_model, dtest, reshape = TRUE)
+pred_class <- max.col(pred_prob) - 1
+
+lev <- sort(unique(c(y_test, pred_class)))
+obs_f <- factor(y_test, levels = lev)
+pred_f <- factor(pred_class, levels = lev)
+
+macro_metrics <- function(obs, pred) {
+  valid <- !is.na(obs) & !is.na(pred)
+  if(sum(valid) == 0) return(c(Accuracy=0, MacroPrecision=0, MacroRecall=0, MacroF1=0))
+  obs <- factor(obs[valid])
+  pred <- factor(pred[valid], levels = levels(obs))
+  lev <- levels(obs)
+  per_class <- lapply(lev, function(l) {
+    tp <- sum(obs == l & pred == l)
+    fp <- sum(obs != l & pred == l)
+    fn <- sum(obs == l & pred != l)
+    precision <- ifelse(tp + fp == 0, 0, tp / (tp + fp))
+    recall <- ifelse(tp + fn == 0, 0, tp / (tp + fn))
+    f1 <- ifelse(precision + recall == 0, 0, 2 * precision * recall / (precision + recall))
+    c(precision, recall, f1)
+  })
+  per_class <- do.call(rbind, per_class)
+  acc <- mean(obs == pred)
+  c(Accuracy = acc,
+    MacroPrecision = mean(per_class[,1]),
+    MacroRecall = mean(per_class[,2]),
+    MacroF1 = mean(per_class[,3]))
+}
+
+te <- macro_metrics(obs_f, pred_f)
+
+# Log to file
+cat(sprintf("\n=== TEST SET PERFORMANCE ===\n"), file = log_file_xgb, append = TRUE)
+cat(sprintf("Test Accuracy: %.4f\n", te["Accuracy"]), file = log_file_xgb, append = TRUE)
+cat(sprintf("Test Precision (Macro): %.4f\n", te["MacroPrecision"]), file = log_file_xgb, append = TRUE)
+cat(sprintf("Test Recall (Macro): %.4f\n", te["MacroRecall"]), file = log_file_xgb, append = TRUE)
+cat(sprintf("Test Macro F1: %.4f\n", te["MacroF1"]), file = log_file_xgb, append = TRUE)
+
+# Log to console
+cat("\n=== TEST SET PERFORMANCE ===\n")
+cat(sprintf("Test Accuracy: %.4f\n", te["Accuracy"]))
+cat(sprintf("Test Precision (Macro): %.4f\n", te["MacroPrecision"]))
+cat(sprintf("Test Recall (Macro): %.4f\n", te["MacroRecall"]))
+cat(sprintf("Test Macro F1: %.4f\n", te["MacroF1"]))
+
+t_all_end <- Sys.time()
+total_time_xgb <- as.numeric(difftime(t_all_end, t_all_start, units = "secs"))
+train_time_xgb <- as.numeric(difftime(t_train_end, t_train_start, units = "secs"))
+
+cat(sprintf("\n[%s] Complete! Total time: %.1f sec (%.1f min)\n",
+            format(Sys.time(), "%H:%M:%S"), total_time_xgb, total_time_xgb/60))
+cat(sprintf("Optimization time: %.1f sec (%.1f min)\n",
+            train_time_xgb, train_time_xgb/60),
+    file = log_file_xgb, append = TRUE)
+cat(sprintf("\n[%s] Complete! Total time: %.1f sec (%.1f min)\n",
+            format(Sys.time(), "%H:%M:%S"), total_time_xgb, total_time_xgb/60),
+    file = log_file_xgb, append = TRUE)
+
+cat("\n[INFO] Training time:", round(train_time_xgb, 2), "sec\n")
+cat("[INFO] Total pipeline time:", round(total_time_xgb, 2), "sec\n")
+
+# Cleanup parallel cluster
+stopCluster(cl)
+
+```
