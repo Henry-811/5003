@@ -1,0 +1,162 @@
+/* Custom styling for ioslides presentation */
+
+/* Slide titles */
+slides > slide.title-slide hgroup h1 {
+  color: #2C3E50;
+  font-size: 52px;
+  letter-spacing: -1px;
+}
+
+slides > slide.title-slide hgroup h2 {
+  color: #34495E;
+  font-size: 28px;
+  margin-top: 20px;
+}
+
+slides > slide.title-slide hgroup p {
+  color: #7F8C8D;
+  font-size: 22px;
+  margin-top: 40px;
+}
+
+/* Regular slide titles */
+slides > slide:not(.nobackground):before {
+  background: none;
+}
+
+slides > slide > hgroup h2 {
+  color: #2C3E50;
+  font-size: 38px;
+  font-weight: 600;
+  margin-bottom: 25px;
+  border-bottom: 3px solid #3498DB;
+  padding-bottom: 10px;
+  padding-right: 40px;
+  overflow-wrap: break-word;
+}
+
+/* Build/reveal animations */
+.build > * {
+  transition: opacity 0.5s ease-in-out;
+}
+
+/* Centered content */
+.centered {
+  text-align: center;
+  margin: auto;
+  width: 80%;
+}
+
+/* Two column layout improvements */
+.columns-2 {
+  -webkit-column-count: 2;
+  -moz-column-count: 2;
+  column-count: 2;
+  -webkit-column-gap: 40px;
+  -moz-column-gap: 40px;
+  column-gap: 40px;
+}
+
+/* Blockquotes (for feedback) */
+blockquote {
+  font-size: 24px;
+  font-style: italic;
+  color: #555;
+  background-color: #ECF0F1;
+  padding: 20px;
+  border-left: 5px solid #3498DB;
+  margin: 20px 0;
+}
+
+/* Lists */
+slides > slide > article ul li {
+  margin: 10px 0;
+  font-size: 20px;
+  line-height: 1.5;
+  padding-right: 30px;
+}
+
+/* Slide content - prevent overflow */
+slides > slide > article {
+  padding-right: 40px;
+}
+
+/* Bold text emphasis */
+strong {
+  color: #E74C3C;
+  font-weight: 700;
+}
+
+/* Code blocks */
+pre {
+  background-color: #F8F9FA;
+  border: 1px solid #DEE2E6;
+  border-radius: 5px;
+  padding: 15px;
+  font-size: 16px;
+}
+
+/* Tables */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 20px 0;
+}
+
+table th {
+  background-color: #3498DB;
+  color: white;
+  padding: 12px;
+  text-align: left;
+  font-weight: 600;
+}
+
+table td {
+  padding: 10px;
+  border-bottom: 1px solid #ddd;
+}
+
+table tr:hover {
+  background-color: #F8F9FA;
+}
+
+/* Checkmarks and cross marks */
+.checkmark {
+  color: #27AE60;
+  font-weight: bold;
+}
+
+.crossmark {
+  color: #E74C3C;
+  font-weight: bold;
+}
+
+/* Highlight boxes */
+.highlight-box {
+  background-color: #FFF3CD;
+  border: 2px solid #FFC107;
+  padding: 15px;
+  margin: 15px 0;
+  border-radius: 5px;
+}
+
+/* Notes section */
+aside.note {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  background-color: #FFF3CD;
+  padding: 10px;
+  border-radius: 5px;
+  font-size: 14px;
+  color: #856404;
+  border: 1px solid #FFC107;
+}
+
+/* Q&A slide special styling */
+slides > slide.flexbox.vcenter {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+}
