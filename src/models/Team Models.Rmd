@@ -1,12 +1,19 @@
 ---
 title: "Group2"
-author: "Songhao"
+author: "W11_G07 Group Members"
 date: "2025-10-15"
 output: html_document
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
+# ========================================
+# GLOBAL CONFIGURATION
+# ========================================
+# Set to TRUE to force retraining all models (ignoring cached models)
+# Set to FALSE to use cached models if available (fast HTML rendering)
+FORCE_RETRAIN <- FALSE
 
 # Auto-install missing packages
 required_packages <- c("tidymodels", "ranger", "doParallel", "dplyr", "readr",
@@ -17,6 +24,18 @@ if (length(missing_packages) > 0) {
   cat("Installing missing packages:", paste(missing_packages, collapse = ", "), "\n")
   install.packages(missing_packages, dependencies = TRUE, repos = "https://cloud.r-project.org")
 }
+
+cat("\n========================================\n")
+cat("MODEL CACHING CONFIGURATION\n")
+cat("========================================\n")
+cat(sprintf("FORCE_RETRAIN: %s\n", FORCE_RETRAIN))
+if (FORCE_RETRAIN) {
+  cat("[INFO] All models will be retrained (cache ignored)\n")
+} else {
+  cat("[INFO] Cached models will be used if available\n")
+  cat("[INFO] Set FORCE_RETRAIN=TRUE to retrain all models\n")
+}
+cat("========================================\n\n")
 ```
 
 ## R Markdown
@@ -62,9 +81,37 @@ t_all_start_rf <- Sys.time()
 DATA_PATH <- "final_cleaned_policy_focused.csv"
 
 cat("\n=== Random Forest: Grid Search Optimization ===\n")
-cat("[INFO] Grid search over hyperparameter combinations\n")
-cat("[INFO] 5-fold CV per combination\n\n")
 
+# ========================================
+# CACHE CHECK
+# ========================================
+cache_model_rf <- "results/random_forest/trained_model.rds"
+cache_params_rf <- "results/random_forest/best_params.rds"
+cache_grid_rf <- "results/random_forest/grid_results.rds"
+
+if (!FORCE_RETRAIN && file.exists(cache_model_rf) && file.exists(cache_params_rf)) {
+  cat("[CACHE] Loading cached Random Forest model...\n")
+  final_fit <- readRDS(cache_model_rf)
+  best_params <- readRDS(cache_params_rf)
+  if (file.exists(cache_grid_rf)) {
+    grid_res <- readRDS(cache_grid_rf)
+  }
+  SKIP_TRAINING_RF <- TRUE
+  cat("[CACHE] Loaded successfully. Skipping training.\n\n")
+} else {
+  if (FORCE_RETRAIN) {
+    cat("[INFO] FORCE_RETRAIN=TRUE: Retraining model\n")
+  } else {
+    cat("[INFO] No cache found. Running optimization\n")
+  }
+  cat("[INFO] Grid search over hyperparameter combinations\n")
+  cat("[INFO] 5-fold CV per combination\n")
+  SKIP_TRAINING_RF <- FALSE
+}
+
+cat("\n")
+
+# Always load data (needed for evaluation even if model is cached)
 dat <- read_csv(DATA_PATH, show_col_types = FALSE) %>%
   mutate(STOP_MAINMODE = as.factor(STOP_MAINMODE))
 
@@ -72,121 +119,143 @@ spl <- initial_split(dat, prop = 0.8, strata = STOP_MAINMODE)
 train <- training(spl)
 test <- testing(spl)
 
-# Create model recipe ONCE and reuse
-rec_model <- recipe(STOP_MAINMODE ~ ., data = train) %>%
-  step_string2factor(all_nominal_predictors()) %>%
-  step_impute_median(all_numeric_predictors()) %>%
-  step_impute_mode(all_nominal_predictors()) %>%
-  step_zv(all_predictors())
+# ========================================
+# TRAINING (Skip if cached)
+# ========================================
+if (!SKIP_TRAINING_RF) {
 
-# Calculate p from the SAME recipe used for training
-prep_rec <- prep(rec_model)
-xtrain <- juice(prep_rec) %>% select(-STOP_MAINMODE)
-p <- ncol(xtrain)
+  # Create model recipe ONCE and reuse
+  rec_model <- recipe(STOP_MAINMODE ~ ., data = train) %>%
+    step_string2factor(all_nominal_predictors()) %>%
+    step_impute_median(all_numeric_predictors()) %>%
+    step_impute_mode(all_nominal_predictors()) %>%
+    step_zv(all_predictors())
 
-# Hyperparameter Group
-mtry_vals <- sort(unique(pmin(p, pmax(1, c(floor(sqrt(p)), floor(2*sqrt(p)))))))
-if (length(mtry_vals) == 1) mtry_vals <- unique(c(mtry_vals, max(1, min(p, mtry_vals + 1))))
-minn_vals  <- c(2, 5, 10)
-trees_vals <- c(300, 600)
+  # Calculate p from the SAME recipe used for training
+  prep_rec <- prep(rec_model)
+  xtrain <- juice(prep_rec) %>% select(-STOP_MAINMODE)
+  p <- ncol(xtrain)
 
-# class weight
-freq_tbl <- table(train$STOP_MAINMODE)
-w_raw    <- as.numeric(freq_tbl)
-names(w_raw) <- names(freq_tbl)
-w_med    <- median(w_raw)
-class_wts <- (w_med / w_raw)
+  # Hyperparameter Group
+  mtry_vals <- sort(unique(pmin(p, pmax(1, c(floor(sqrt(p)), floor(2*sqrt(p)))))))
+  if (length(mtry_vals) == 1) mtry_vals <- unique(c(mtry_vals, max(1, min(p, mtry_vals + 1))))
+  minn_vals  <- c(2, 5, 10)
+  trees_vals <- c(300, 600)
 
-class_wts <- setNames(as.numeric(class_wts), names(class_wts))
+  # class weight
+  freq_tbl <- table(train$STOP_MAINMODE)
+  w_raw    <- as.numeric(freq_tbl)
+  names(w_raw) <- names(freq_tbl)
+  w_med    <- median(w_raw)
+  class_wts <- (w_med / w_raw)
 
-# Model and workflow
-rf_spec <- rand_forest(mtry = tune(), min_n = tune(), trees = tune()) %>%
-  set_engine(
-    "ranger",
-    importance = "impurity",
-    respect.unordered.factors = "order",  
-    sample.fraction = 0.7,
-    class.weights   = class_wts,          
-    num.threads     = max(1, parallel::detectCores()-1)
-  ) %>%
-  set_mode("classification")
+  class_wts <- setNames(as.numeric(class_wts), names(class_wts))
 
-wf <- workflow() %>% add_model(rf_spec) %>% add_recipe(rec_model)
+  # Model and workflow
+  rf_spec <- rand_forest(mtry = tune(), min_n = tune(), trees = tune()) %>%
+    set_engine(
+      "ranger",
+      importance = "impurity",
+      respect.unordered.factors = "order",
+      sample.fraction = 0.7,
+      class.weights   = class_wts,
+      num.threads     = max(1, parallel::detectCores()-1)
+    ) %>%
+    set_mode("classification")
 
-# CV:5
-folds <- vfold_cv(train, v = 5, strata = STOP_MAINMODE)
+  wf <- workflow() %>% add_model(rf_spec) %>% add_recipe(rec_model)
 
-# Define Macro F1 metric
-f_meas_macro <- metric_tweak("f_meas_macro", f_meas, estimator = "macro_weighted")
+  # CV:5
+  folds <- vfold_cv(train, v = 5, strata = STOP_MAINMODE)
 
-# Create optimization log
-log_file_rf <- "random_forest_optimization.log"
-cat("=== Random Forest Grid Search Progress ===\n", file = log_file_rf)
-cat(sprintf("Started: %s\n\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S")), file = log_file_rf, append = TRUE)
-cat(sprintf("[INFO] Grid search: %d combinations\n", length(mtry_vals) * length(minn_vals) * length(trees_vals)),
-    file = log_file_rf, append = TRUE)
-cat("[INFO] Hyperparameters: mtry, min_n, trees\n", file = log_file_rf, append = TRUE)
-cat("[INFO] Optimizing: Macro F1 score via 5-fold CV\n\n", file = log_file_rf, append = TRUE)
+  # Define Macro F1 metric
+  f_meas_macro <- metric_tweak("f_meas_macro", f_meas, estimator = "macro_weighted")
 
-# parallel
-cl <- makeCluster(max(1, parallel::detectCores()-1)); registerDoParallel(cl)
+  # Create optimization log
+  log_file_rf <- "results/logs/random_forest_optimization.log"
+  dir.create(dirname(log_file_rf), showWarnings = FALSE, recursive = TRUE)
+  cat("=== Random Forest Grid Search Progress ===\n", file = log_file_rf)
+  cat(sprintf("Started: %s\n\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S")), file = log_file_rf, append = TRUE)
+  cat(sprintf("[INFO] Grid search: %d combinations\n", length(mtry_vals) * length(minn_vals) * length(trees_vals)),
+      file = log_file_rf, append = TRUE)
+  cat("[INFO] Hyperparameters: mtry, min_n, trees\n", file = log_file_rf, append = TRUE)
+  cat("[INFO] Optimizing: Macro F1 score via 5-fold CV\n\n", file = log_file_rf, append = TRUE)
 
-cat(sprintf("[INFO] Parallel cluster: %d cores\n", parallel::detectCores() - 1))
-cat(sprintf("[INFO] Parallel cluster: %d cores\n", parallel::detectCores() - 1),
-    file = log_file_rf, append = TRUE)
+  # parallel
+  cl <- makeCluster(max(1, parallel::detectCores()-1)); registerDoParallel(cl)
 
-cat(sprintf("\n[%s] Starting grid search...\n", format(Sys.time(), "%H:%M:%S")))
-cat(sprintf("\n[%s] Starting grid search...\n", format(Sys.time(), "%H:%M:%S")),
-    file = log_file_rf, append = TRUE)
+  cat(sprintf("[INFO] Parallel cluster: %d cores\n", parallel::detectCores() - 1))
+  cat(sprintf("[INFO] Parallel cluster: %d cores\n", parallel::detectCores() - 1),
+      file = log_file_rf, append = TRUE)
 
-t_train_start_rf <- Sys.time()
+  cat(sprintf("\n[%s] Starting grid search...\n", format(Sys.time(), "%H:%M:%S")))
+  cat(sprintf("\n[%s] Starting grid search...\n", format(Sys.time(), "%H:%M:%S")),
+      file = log_file_rf, append = TRUE)
 
-control_g  <- control_grid(verbose = FALSE, parallel_over = "resamples")
-grid_12    <- tidyr::crossing(mtry = mtry_vals, min_n = minn_vals, trees = trees_vals)
+  t_train_start_rf <- Sys.time()
 
-grid_res <- tune_grid(
-  wf,
-  resamples = folds,
-  grid      = grid_12,
-  metrics   = metric_set(f_meas_macro),
-  control   = control_g
-)
+  control_g  <- control_grid(verbose = FALSE, parallel_over = "resamples")
+  grid_12    <- tidyr::crossing(mtry = mtry_vals, min_n = minn_vals, trees = trees_vals)
 
-t_train_end_rf <- Sys.time()
+  grid_res <- tune_grid(
+    wf,
+    resamples = folds,
+    grid      = grid_12,
+    metrics   = metric_set(f_meas_macro),
+    control   = control_g
+  )
 
-cat(sprintf("\n[%s] Grid search complete\n", format(Sys.time(), "%H:%M:%S")))
-cat(sprintf("\n[%s] Grid search complete\n", format(Sys.time(), "%H:%M:%S")),
-    file = log_file_rf, append = TRUE)
+  t_train_end_rf <- Sys.time()
 
-# Get all results
-all_results_rf <- collect_metrics(grid_res)
+  cat(sprintf("\n[%s] Grid search complete\n", format(Sys.time(), "%H:%M:%S")))
+  cat(sprintf("\n[%s] Grid search complete\n", format(Sys.time(), "%H:%M:%S")),
+      file = log_file_rf, append = TRUE)
 
-best_params <- select_best(grid_res, metric = "f_meas_macro")
-best_score_rf <- all_results_rf %>%
-  filter(.metric == "f_meas_macro") %>%
-  filter(mtry == best_params$mtry, min_n == best_params$min_n, trees == best_params$trees) %>%
-  pull(mean)
+  # Get all results
+  all_results_rf <- collect_metrics(grid_res)
 
-# Log final summary
-cat(sprintf("\n=== OPTIMIZATION COMPLETE ===\n"), file = log_file_rf, append = TRUE)
-cat(sprintf("Best CV Macro F1: %.4f\n", best_score_rf), file = log_file_rf, append = TRUE)
-cat(sprintf("Best params: mtry=%d, min_n=%d, trees=%d\n",
-            best_params$mtry, best_params$min_n, best_params$trees),
-    file = log_file_rf, append = TRUE)
-cat(sprintf("Grid search time: %.1f sec (%.1f min)\n",
-            as.numeric(difftime(t_train_end_rf, t_train_start_rf, units="secs")),
-            as.numeric(difftime(t_train_end_rf, t_train_start_rf, units="mins"))),
-    file = log_file_rf, append = TRUE)
+  best_params <- select_best(grid_res, metric = "f_meas_macro")
+  best_score_rf <- all_results_rf %>%
+    filter(.metric == "f_meas_macro") %>%
+    filter(mtry == best_params$mtry, min_n == best_params$min_n, trees == best_params$trees) %>%
+    pull(mean)
 
-cat("\n=== OPTIMIZATION COMPLETE ===\n")
-cat("[Best CV Macro F1]:", best_score_rf, "\n")
-cat("[Best params]\n")
-print(best_params)
+  # Log final summary
+  cat(sprintf("\n=== OPTIMIZATION COMPLETE ===\n"), file = log_file_rf, append = TRUE)
+  cat(sprintf("Best CV Macro F1: %.4f\n", best_score_rf), file = log_file_rf, append = TRUE)
+  cat(sprintf("Best params: mtry=%d, min_n=%d, trees=%d\n",
+              best_params$mtry, best_params$min_n, best_params$trees),
+      file = log_file_rf, append = TRUE)
+  cat(sprintf("Grid search time: %.1f sec (%.1f min)\n",
+              as.numeric(difftime(t_train_end_rf, t_train_start_rf, units="secs")),
+              as.numeric(difftime(t_train_end_rf, t_train_start_rf, units="mins"))),
+      file = log_file_rf, append = TRUE)
 
-# Model testing and evaluation
-final_wf  <- finalize_workflow(wf, best_params)
-final_fit <- last_fit(final_wf, split = spl)
+  cat("\n=== OPTIMIZATION COMPLETE ===\n")
+  cat("[Best CV Macro F1]:", best_score_rf, "\n")
+  cat("[Best params]\n")
+  print(best_params)
 
+  # Model testing and evaluation
+  final_wf  <- finalize_workflow(wf, best_params)
+  final_fit <- last_fit(final_wf, split = spl)
+
+  # ========================================
+  # SAVE TO CACHE
+  # ========================================
+  dir.create(dirname(cache_model_rf), showWarnings = FALSE, recursive = TRUE)
+  saveRDS(final_fit, cache_model_rf)
+  saveRDS(best_params, cache_params_rf)
+  saveRDS(grid_res, cache_grid_rf)
+  cat("[CACHE] Model saved to:", cache_model_rf, "\n")
+
+  # Close parallel
+  stopCluster(cl); registerDoSEQ()
+}
+
+# ========================================
+# EVALUATION (Always runs, even if cached)
+# ========================================
 pred <- collect_predictions(final_fit)
 
 # overall Accuracy
@@ -281,10 +350,38 @@ t_all_start_glmnet <- Sys.time()
 DATA_PATH_GLMNET <- "final_cleaned_policy_focused.csv"
 
 cat("\n=== GLM-NET: Sparse Matrix + Tidymodels Optimization ===\n")
-cat("[INFO] Reduced maxit: 10,000 (20× faster than 200,000)\n")
-cat("[INFO] Penalty range: [1e-5, 1e-2] (prevents over-regularization)\n")
-cat("[INFO] Bayesian optimization: 16 iterations (5 initial + 11 Bayesian)\n\n")
 
+# ========================================
+# CACHE CHECK
+# ========================================
+cache_model_glmnet <- "results/glmnet/trained_model.rds"
+cache_params_glmnet <- "results/glmnet/best_params.rds"
+cache_bayes_glmnet <- "results/glmnet/bayes_results.rds"
+
+if (!FORCE_RETRAIN && file.exists(cache_model_glmnet) && file.exists(cache_params_glmnet)) {
+  cat("[CACHE] Loading cached GLM-NET model...\n")
+  final_fit_glmnet <- readRDS(cache_model_glmnet)
+  best_params_glmnet <- readRDS(cache_params_glmnet)
+  if (file.exists(cache_bayes_glmnet)) {
+    bayes_rs_glmnet <- readRDS(cache_bayes_glmnet)
+  }
+  SKIP_TRAINING_GLMNET <- TRUE
+  cat("[CACHE] Loaded successfully. Skipping training.\n\n")
+} else {
+  if (FORCE_RETRAIN) {
+    cat("[INFO] FORCE_RETRAIN=TRUE: Retraining model\n")
+  } else {
+    cat("[INFO] No cache found. Running optimization\n")
+  }
+  cat("[INFO] Reduced maxit: 10,000 (20× faster than 200,000)\n")
+  cat("[INFO] Penalty range: [1e-5, 1e-2] (prevents over-regularization)\n")
+  cat("[INFO] Bayesian optimization: 16 iterations (5 initial + 11 Bayesian)\n")
+  SKIP_TRAINING_GLMNET <- FALSE
+}
+
+cat("\n")
+
+if (!SKIP_TRAINING_GLMNET) {
 
 # ----Load and preprocess data----
 
@@ -370,7 +467,8 @@ cat(sprintf("[INFO] Parallel cluster: %d cores\n", parallel::detectCores() - 1))
 
 # ----Bayesian optimization with custom logging----
 
-log_file_glmnet <- "glmnet_optimization.log"
+log_file_glmnet <- "results/logs/glmnet_optimization.log"
+dir.create(dirname(log_file_glmnet), showWarnings = FALSE, recursive = TRUE)
 cat("=== GLM-NET Bayesian Optimization Progress ===\n", file = log_file_glmnet)
 cat(sprintf("Started: %s\n\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S")), file = log_file_glmnet, append = TRUE)
 cat("[INFO] Optimized Bayesian optimization: 16 iterations (5 initial + 11 Bayesian)\n", file = log_file_glmnet, append = TRUE)
@@ -552,6 +650,17 @@ final_fit_glmnet <- fit(final_wf_glmnet, data = train_dat_glmnet)
 
 cat(sprintf("[%s] Final model trained\n", format(Sys.time(), "%H:%M:%S")))
 
+# Save to cache
+dir.create(dirname(cache_model_glmnet), showWarnings = FALSE, recursive = TRUE)
+saveRDS(final_fit_glmnet, cache_model_glmnet)
+saveRDS(best_params_glmnet, cache_params_glmnet)
+saveRDS(bayes_rs_glmnet, cache_bayes_glmnet)
+cat("[CACHE] Model saved to:", cache_model_glmnet, "\n")
+cat("[CACHE] Best params saved to:", cache_params_glmnet, "\n")
+cat("[CACHE] Bayes results saved to:", cache_bayes_glmnet, "\n")
+
+}
+
 # ----Test evaluation----
 
 cat(sprintf("\n[%s] Evaluating on test set...\n", format(Sys.time(), "%H:%M:%S")))
@@ -644,6 +753,41 @@ set.seed(5003)
 t_all_start_svm <- Sys.time()
 
 DATA_PATH_SVM <- "final_cleaned_policy_focused.csv"
+
+# ----Cache check----
+
+cache_model_svm <- "results/svm/trained_model.rds"
+cache_params_svm <- "results/svm/best_params.rds"
+cache_grid_svm <- "results/svm/grid_results.rds"
+cache_scaling_svm <- "results/svm/scaling_params.rds"
+
+if (!FORCE_RETRAIN && file.exists(cache_model_svm) && file.exists(cache_params_svm) && file.exists(cache_scaling_svm)) {
+  cat("[CACHE] Loading cached SVM model...\n")
+  svm_fit <- readRDS(cache_model_svm)
+
+  # Load best params
+  best_params_list_svm <- readRDS(cache_params_svm)
+  best_cost_svm <- best_params_list_svm$cost
+  best_gamma_svm <- best_params_list_svm$gamma
+  best_f1_cv_svm <- best_params_list_svm$cv_f1
+
+  # Load scaling params
+  scaling_params_svm <- readRDS(cache_scaling_svm)
+  X_test_svm <- scaling_params_svm$X_test
+  y_test_svm <- scaling_params_svm$y_test
+
+  cat(sprintf("[CACHE] Loaded: cost=%.2f, gamma=%.6f, CV Macro F1=%.4f\n",
+              best_cost_svm, best_gamma_svm, best_f1_cv_svm))
+  SKIP_TRAINING_SVM <- TRUE
+} else {
+  cat("[INFO] No cached SVM model found or FORCE_RETRAIN=TRUE\n")
+  cat("[INFO] Running SVM grid search with 5-fold CV\n")
+  SKIP_TRAINING_SVM <- FALSE
+}
+
+cat("\n")
+
+if (!SKIP_TRAINING_SVM) {
 
 # ----Load and preprocess data----
 
@@ -839,6 +983,33 @@ svm_fit <- e1071::svm(
   probability = TRUE
 )
 
+# Save to cache
+dir.create(dirname(cache_model_svm), showWarnings = FALSE, recursive = TRUE)
+saveRDS(svm_fit, cache_model_svm)
+
+# Save best params
+best_params_list_svm <- list(
+  cost = best_cost_svm,
+  gamma = best_gamma_svm,
+  cv_f1 = best_f1_cv_svm
+)
+saveRDS(best_params_list_svm, cache_params_svm)
+saveRDS(grid_results_svm, cache_grid_svm)
+
+# Save scaling params and test data (needed for evaluation)
+scaling_params_svm <- list(
+  X_test = X_test_svm,
+  y_test = y_test_svm
+)
+saveRDS(scaling_params_svm, cache_scaling_svm)
+
+cat("[CACHE] Model saved to:", cache_model_svm, "\n")
+cat("[CACHE] Best params saved to:", cache_params_svm, "\n")
+cat("[CACHE] Grid results saved to:", cache_grid_svm, "\n")
+cat("[CACHE] Scaling params saved to:", cache_scaling_svm, "\n")
+
+}
+
 # ----Test evaluation----
 
 pred_svm <- predict(svm_fit, newdata = X_test_svm, probability = TRUE)
@@ -896,6 +1067,40 @@ invisible(lapply(libs, library, character.only = TRUE))
 set.seed(5003)  # Aligned seed for reproducibility
 
 t_all_start <- Sys.time()
+
+# ----Cache check----
+
+cache_model_dt <- "results/decision_tree/trained_model.rds"
+cache_params_dt <- "results/decision_tree/best_params.rds"
+cache_bayes_dt <- "results/decision_tree/bayes_results.rds"
+cache_test_data_dt <- "results/decision_tree/test_data.rds"
+
+if (!FORCE_RETRAIN && file.exists(cache_model_dt) && file.exists(cache_params_dt) && file.exists(cache_test_data_dt)) {
+  cat("[CACHE] Loading cached Decision Tree model...\n")
+  final_model_dt <- readRDS(cache_model_dt)
+
+  # Load best params
+  best_params_dt <- readRDS(cache_params_dt)
+  best_score_dt <- best_params_dt$cv_f1
+
+  # Load test data
+  test_data_list_dt <- readRDS(cache_test_data_dt)
+  test_x_enc <- test_data_list_dt$test_x_enc
+  test_df <- test_data_list_dt$test_df
+  stop_var <- test_data_list_dt$stop_var
+
+  cat(sprintf("[CACHE] Loaded: cp=%.6f, maxdepth=%d, minsplit=%d, minbucket=%d, CV Macro F1=%.4f\n",
+              best_params_dt$cp, best_params_dt$maxdepth, best_params_dt$minsplit, best_params_dt$minbucket, best_score_dt))
+  SKIP_TRAINING_DT <- TRUE
+} else {
+  cat("[INFO] No cached Decision Tree model found or FORCE_RETRAIN=TRUE\n")
+  cat("[INFO] Running Decision Tree Bayesian optimization with 22 iterations\n")
+  SKIP_TRAINING_DT <- FALSE
+}
+
+cat("\n")
+
+if (!SKIP_TRAINING_DT) {
 
 # ----Load data----
 
@@ -966,7 +1171,8 @@ library(ParBayesianOptimization)
 # Note: Using sequential CV for Decision Tree (faster than parallel due to low overhead)
 
 # Create optimization log file first
-log_file_dt <- "decision_tree_optimization.log"
+log_file_dt <- "results/logs/decision_tree_optimization.log"
+dir.create(dirname(log_file_dt), showWarnings = FALSE, recursive = TRUE)
 cat("=== Decision Tree Bayesian Optimization Progress ===\n", file = log_file_dt)
 cat(sprintf("Started: %s\n\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S")), file = log_file_dt, append = TRUE)
 cat("[INFO] Bayesian optimization: 22 iterations (5 initial + 17 Bayesian)\n", file = log_file_dt, append = TRUE)
@@ -1121,6 +1327,36 @@ final_model_dt <- rpart::rpart(
   )
 )
 
+# Save to cache
+dir.create(dirname(cache_model_dt), showWarnings = FALSE, recursive = TRUE)
+saveRDS(final_model_dt, cache_model_dt)
+
+# Save best params with CV score
+best_params_with_cv_dt <- list(
+  cp = best_params_dt$cp,
+  maxdepth = round(best_params_dt$maxdepth),
+  minsplit = round(best_params_dt$minsplit),
+  minbucket = round(best_params_dt$minbucket),
+  cv_f1 = best_score_dt
+)
+saveRDS(best_params_with_cv_dt, cache_params_dt)
+saveRDS(bayes_out_dt, cache_bayes_dt)
+
+# Save test data (needed for evaluation)
+test_data_list_dt <- list(
+  test_x_enc = test_x_enc,
+  test_df = test_df,
+  stop_var = stop_var
+)
+saveRDS(test_data_list_dt, cache_test_data_dt)
+
+cat("[CACHE] Model saved to:", cache_model_dt, "\n")
+cat("[CACHE] Best params saved to:", cache_params_dt, "\n")
+cat("[CACHE] Bayes results saved to:", cache_bayes_dt, "\n")
+cat("[CACHE] Test data saved to:", cache_test_data_dt, "\n")
+
+}
+
 # ----Test evaluation----
 
 test_pred <- predict(final_model_dt, as.data.frame(test_x_enc), type = "class")
@@ -1170,6 +1406,47 @@ invisible(lapply(libs, library, character.only = TRUE))
 set.seed(5003)
 
 t_all_start <- Sys.time()
+
+# ----Cache check----
+
+cache_model_xgb <- "results/xgboost/trained_model.model"
+cache_params_xgb <- "results/xgboost/best_params.rds"
+cache_bayes_xgb <- "results/xgboost/bayes_results.rds"
+cache_test_data_xgb <- "results/xgboost/test_data.rds"
+
+if (!FORCE_RETRAIN && file.exists(cache_model_xgb) && file.exists(cache_params_xgb) && file.exists(cache_test_data_xgb)) {
+  cat("[CACHE] Loading cached XGBoost model...\n")
+
+  # Load XGBoost model (use xgb.load for .model files)
+  final_model <- xgb.load(cache_model_xgb)
+
+  # Load best params
+  best_params_list_xgb <- readRDS(cache_params_xgb)
+  best_params_bayes <- best_params_list_xgb$best_params
+  best_score <- best_params_list_xgb$cv_f1
+
+  # Load test data (raw matrices, not DMatrix)
+  test_data_list_xgb <- readRDS(cache_test_data_xgb)
+  X_test <- test_data_list_xgb$X_test
+  y_test <- test_data_list_xgb$y_test
+
+  # Reconstruct DMatrix (can't serialize/deserialize DMatrix objects)
+  dtest <- xgb.DMatrix(data = X_test, label = y_test)
+
+  cat(sprintf("[CACHE] Loaded: depth=%d, eta=%.4f, subsample=%.2f, colsample=%.2f, child_wt=%.1f, gamma=%.2f, CV Macro F1=%.4f\n",
+              best_params_bayes$max_depth, best_params_bayes$eta, best_params_bayes$subsample,
+              best_params_bayes$colsample_bytree, best_params_bayes$min_child_weight,
+              best_params_bayes$gamma, best_score))
+  SKIP_TRAINING_XGB <- TRUE
+} else {
+  cat("[INFO] No cached XGBoost model found or FORCE_RETRAIN=TRUE\n")
+  cat("[INFO] Running XGBoost Bayesian optimization with 22 iterations\n")
+  SKIP_TRAINING_XGB <- FALSE
+}
+
+cat("\n")
+
+if (!SKIP_TRAINING_XGB) {
 
 # ----Load data----
 
@@ -1304,36 +1581,12 @@ n_cores_per_fold <- max(1, floor(n_cores_total / n_cv_folds))
 cl <- makeCluster(n_cv_folds)
 registerDoParallel(cl)
 
-# Define custom Macro F1 evaluation metric for XGBoost
-# XGBoost eval functions: f(preds, dtrain) -> list(metric_name, value)
-# Higher Macro F1 = better, so we return negative value for minimization
-macro_f1_eval <- function(preds, dtrain) {
-  labels <- getinfo(dtrain, "label")
-
-  # Reshape predictions to class probabilities
-  num_class <- length(preds) / length(labels)
-  preds_matrix <- matrix(preds, ncol = num_class, byrow = TRUE)
-  pred_class <- max.col(preds_matrix) - 1
-
-  # Calculate per-class F1
-  all_classes <- 0:(num_class - 1)
-  f1_per_class <- sapply(all_classes, function(l) {
-    tp <- sum(labels == l & pred_class == l)
-    fp <- sum(labels != l & pred_class == l)
-    fn <- sum(labels == l & pred_class != l)
-    precision <- ifelse(tp + fp > 0, tp / (tp + fp), 0)
-    recall <- ifelse(tp + fn > 0, tp / (tp + fn), 0)
-    ifelse(precision + recall > 0, 2 * precision * recall / (precision + recall), 0)
-  })
-
-  macro_f1 <- mean(f1_per_class, na.rm = TRUE)
-
-  # Return negative because XGBoost minimizes custom metrics
-  return(list(metric = "macro_f1", value = -macro_f1))
-}
+# Note: XGBoost uses mlogloss for internal evaluation (fast, high variance)
+# Bayesian optimization uses Macro F1 as the optimization target (better for imbalanced classes)
 
 # Create optimization log
-log_file_xgb <- "xgboost_optimization.log"
+log_file_xgb <- "results/logs/xgboost_optimization.log"
+dir.create(dirname(log_file_xgb), showWarnings = FALSE, recursive = TRUE)
 cat("=== Bayesian Optimization Progress Log ===\n", file = log_file_xgb)
 cat(sprintf("Started: %s\n\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S")), file = log_file_xgb, append = TRUE)
 cat("[INFO] Bayesian optimization: 22 iterations (7 initial + 15 Bayesian)\n", file = log_file_xgb, append = TRUE)
@@ -1361,6 +1614,7 @@ xgb_cv_bayes <- function(max_depth, eta, subsample, colsample_bytree, min_child_
     colsample_bytree = colsample_bytree,
     min_child_weight = min_child_weight,
     gamma = gamma,
+    eval_metric = "mlogloss",
     nthread = n_cores_per_fold,
     seed = 5003  # Ensures reproducibility (XGBoost ignores R's set.seed)
   )
@@ -1374,7 +1628,7 @@ xgb_cv_bayes <- function(max_depth, eta, subsample, colsample_bytree, min_child_
 
   # Parallel CV across folds - collect detailed metrics
   cv_results <- foreach(fold_idx = 1:5, .packages = c("xgboost"),
-                        .combine = rbind, .export = c("folds", "X_train", "y_train", "sample_weights", "macro_f1_eval", "params")) %dopar% {
+                        .combine = rbind, .export = c("folds", "X_train", "y_train", "sample_weights", "params")) %dopar% {
     val_idx <- folds[[fold_idx]]
     train_idx <- setdiff(1:nrow(X_train), val_idx)
 
@@ -1388,8 +1642,7 @@ xgb_cv_bayes <- function(max_depth, eta, subsample, colsample_bytree, min_child_
       nrounds = 100,
       watchlist = list(train = dtrain_cv, val = dval_cv),
       early_stopping_rounds = 10,
-      verbose = 0,
-      feval = macro_f1_eval
+      verbose = 0
     )
 
     # Validation metrics
@@ -1558,6 +1811,7 @@ final_params <- list(
   colsample_bytree = best_params_bayes$colsample_bytree,
   min_child_weight = best_params_bayes$min_child_weight,
   gamma = best_params_bayes$gamma,
+  eval_metric = "mlogloss",
   seed = 5003  # Ensures reproducibility (XGBoost ignores R's set.seed)
 )
 
@@ -1567,11 +1821,68 @@ final_model <- xgb.train(
   nrounds = 100,
   watchlist = list(train = dtrain),
   early_stopping_rounds = 10,
-  verbose = 0,
-  feval = macro_f1_eval
+  verbose = 0
 )
 
 t_train_end <- Sys.time()
+
+# Save to cache
+dir.create(dirname(cache_model_xgb), showWarnings = FALSE, recursive = TRUE)
+
+# Save XGBoost model (use xgb.save for .model files)
+xgb.save(final_model, cache_model_xgb)
+
+# Save best params
+best_params_list_xgb <- list(
+  best_params = best_params_bayes,
+  cv_f1 = best_score
+)
+saveRDS(best_params_list_xgb, cache_params_xgb)
+saveRDS(bayes_out, cache_bayes_xgb)
+
+# Save test data (needed for evaluation)
+# Note: Save raw matrices, not DMatrix (DMatrix can't be serialized)
+test_data_list_xgb <- list(
+  X_test = X_test,
+  y_test = y_test
+)
+saveRDS(test_data_list_xgb, cache_test_data_xgb)
+
+cat("[CACHE] Model saved to:", cache_model_xgb, "\n")
+cat("[CACHE] Best params saved to:", cache_params_xgb, "\n")
+cat("[CACHE] Bayes results saved to:", cache_bayes_xgb, "\n")
+cat("[CACHE] Test data saved to:", cache_test_data_xgb, "\n")
+
+}
+
+# ----Feature Importance----
+
+cat("\n=== Extracting Feature Importance ===\n")
+
+importance_matrix <- xgb.importance(
+  feature_names = colnames(X_train),
+  model = final_model
+)
+
+# Save CSV
+write.csv(importance_matrix, "results/xgboost/feature_importance.csv", row.names = FALSE)
+
+# Create plot
+top_features <- head(importance_matrix, 20)
+
+importance_plot <- ggplot(top_features, aes(x = reorder(Feature, Gain), y = Gain)) +
+  geom_col(fill = "#3498DB") +
+  coord_flip() +
+  labs(title = "XGBoost Feature Importance (Top 20)",
+       x = "Feature",
+       y = "Gain") +
+  theme_minimal(base_size = 12)
+
+ggsave("results/xgboost/feature_importance.png", importance_plot, width = 10, height = 8)
+
+cat("Feature importance saved to results/xgboost/\n")
+cat("Top 5 features:\n")
+print(head(importance_matrix, 5))
 
 # ----Test evaluation----
 
