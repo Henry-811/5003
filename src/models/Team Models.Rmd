@@ -852,29 +852,23 @@ test_svm  <- df_svm[-train_idx_svm, , drop = FALSE]
 
 cat("[INFO] Split:", nrow(train_svm), "train,", nrow(test_svm), "test\n")
 
-# ----Design Matrix (One-Hot Encoding) & Scaling----
+# ----Design Matrix (One-Hot Encoding Only - Scaling Inside CV)----
 
 form_svm <- as.formula("STOP_MAINMODE ~ .")
 
-X_train_svm <- model.matrix(form_svm, data = train_svm)[, -1, drop = FALSE]
-X_test_svm  <- model.matrix(form_svm, data = test_svm)[, -1, drop = FALSE]
+# One-hot encode (done once - this is deterministic and doesn't leak information)
+X_train_svm_unscaled <- model.matrix(form_svm, data = train_svm)[, -1, drop = FALSE]
+X_test_svm_unscaled  <- model.matrix(form_svm, data = test_svm)[, -1, drop = FALSE]
 
 y_train_svm <- train_svm$STOP_MAINMODE
 y_test_svm  <- test_svm$STOP_MAINMODE
 
-# Scale numeric columns
-num_idx_svm <- which(apply(X_train_svm, 2, is.numeric))
-center_svm <- colMeans(X_train_svm[, num_idx_svm, drop = FALSE])
-scale_sd_svm <- apply(X_train_svm[, num_idx_svm, drop = FALSE], 2, sd)
-scale_sd_svm[scale_sd_svm == 0] <- 1
+# Identify numeric columns (for scaling inside CV)
+num_idx_svm <- which(apply(X_train_svm_unscaled, 2, is.numeric))
 
-X_train_svm[, num_idx_svm] <- scale(X_train_svm[, num_idx_svm, drop = FALSE],
-                                      center = center_svm, scale = scale_sd_svm)
-X_test_svm[,  num_idx_svm] <- scale(X_test_svm[,  num_idx_svm, drop = FALSE],
-                                      center = center_svm, scale = scale_sd_svm)
-
-cat("[INFO] Encoded dims - train:", nrow(X_train_svm), "x", ncol(X_train_svm),
-    "; test:", nrow(X_test_svm), "x", ncol(X_test_svm), "\n")
+cat("[INFO] Encoded dims - train:", nrow(X_train_svm_unscaled), "x", ncol(X_train_svm_unscaled),
+    "; test:", nrow(X_test_svm_unscaled), "x", ncol(X_test_svm_unscaled), "\n")
+cat("[INFO] Scaling will be fitted separately within each CV fold to prevent leakage\n")
 
 # ----Parallel setup----
 
@@ -886,12 +880,12 @@ cat("[INFO] Parallel cluster registered with", n_cores_svm, "workers\n\n")
 # ----Hyperparameter tuning (Parallel Grid Search with 5-fold CV)----
 
 set.seed(5003)
-p_svm <- ncol(X_train_svm)
+p_svm <- ncol(X_train_svm_unscaled)
 
 # Macro F1 calculation
 calc_macro_f1_svm <- function(predicted, actual) {
   classes <- union(levels(predicted), levels(actual))
-  classes <- classes[!is.na(classes)]
+  classes <- classes [!is.na(classes)]
 
   f1_scores <- numeric(length(classes))
   for (i in seq_along(classes)) {
@@ -919,14 +913,14 @@ cat(sprintf("[INFO] Grid search: %d combinations\n\n", nrow(param_grid_svm)))
 # Create 5-fold CV indices
 set.seed(5003)
 n_folds_svm <- 5
-fold_indices_svm <- sample(rep(1:n_folds_svm, length.out = nrow(X_train_svm)))
+fold_indices_svm <- sample(rep(1:n_folds_svm, length.out = nrow(X_train_svm_unscaled)))
 
 # Parallel grid search
 t_train_start_svm <- Sys.time()
 grid_results_svm <- foreach(i = 1:nrow(param_grid_svm),
                             .combine = rbind,
                             .packages = c("e1071"),
-                            .export = c("X_train_svm", "y_train_svm", "fold_indices_svm", "calc_macro_f1_svm")) %dopar% {
+                            .export = c("X_train_svm_unscaled", "y_train_svm", "fold_indices_svm", "calc_macro_f1_svm", "num_idx_svm")) %dopar% {
 
   cost_val <- param_grid_svm$cost[i]
   gamma_val <- param_grid_svm$gamma[i]
@@ -936,15 +930,30 @@ grid_results_svm <- foreach(i = 1:nrow(param_grid_svm),
     train_idx <- which(fold_indices_svm != fold)
     val_idx <- which(fold_indices_svm == fold)
 
+    # Scale within this fold (fit on training fold, transform both train and val)
+    X_train_fold <- X_train_svm_unscaled[train_idx, , drop = FALSE]
+    X_val_fold <- X_train_svm_unscaled[val_idx, , drop = FALSE]
+
+    if (length(num_idx_svm) > 0) {
+      center_fold <- colMeans(X_train_fold[, num_idx_svm, drop = FALSE])
+      scale_sd_fold <- apply(X_train_fold[, num_idx_svm, drop = FALSE], 2, sd)
+      scale_sd_fold[scale_sd_fold == 0] <- 1
+
+      X_train_fold[, num_idx_svm] <- scale(X_train_fold[, num_idx_svm, drop = FALSE],
+                                            center = center_fold, scale = scale_sd_fold)
+      X_val_fold[, num_idx_svm] <- scale(X_val_fold[, num_idx_svm, drop = FALSE],
+                                          center = center_fold, scale = scale_sd_fold)
+    }
+
     svm_model <- e1071::svm(
-      x = X_train_svm[train_idx, , drop = FALSE],
+      x = X_train_fold,
       y = y_train_svm[train_idx],
       kernel = "radial",
       cost = cost_val,
       gamma = gamma_val
     )
 
-    pred <- predict(svm_model, newdata = X_train_svm[val_idx, , drop = FALSE])
+    pred <- predict(svm_model, newdata = X_val_fold)
     fold_f1[fold] <- calc_macro_f1_svm(pred, y_train_svm[val_idx])
   }
 
@@ -973,10 +982,27 @@ cat(sprintf("  CV Macro F1: %.4f (±%.4f)\n\n", best_f1_cv_svm, grid_results_svm
 
 # ----Train final model----
 
+cat("[INFO] Scaling full training and test sets for final model...\n")
+
+# Scale training and test sets (fit on full training set)
+X_train_svm_scaled <- X_train_svm_unscaled
+X_test_svm_scaled <- X_test_svm_unscaled
+
+if (length(num_idx_svm) > 0) {
+  center_final <- colMeans(X_train_svm_unscaled[, num_idx_svm, drop = FALSE])
+  scale_sd_final <- apply(X_train_svm_unscaled[, num_idx_svm, drop = FALSE], 2, sd)
+  scale_sd_final[scale_sd_final == 0] <- 1
+
+  X_train_svm_scaled[, num_idx_svm] <- scale(X_train_svm_unscaled[, num_idx_svm, drop = FALSE],
+                                               center = center_final, scale = scale_sd_final)
+  X_test_svm_scaled[, num_idx_svm] <- scale(X_test_svm_unscaled[, num_idx_svm, drop = FALSE],
+                                             center = center_final, scale = scale_sd_final)
+}
+
 cat("[INFO] Training final SVM model on full training set\n\n")
 
 svm_fit <- e1071::svm(
-  x = X_train_svm, y = y_train_svm,
+  x = X_train_svm_scaled, y = y_train_svm,
   kernel = "radial",
   cost = best_cost_svm,
   gamma = best_gamma_svm,
@@ -996,9 +1022,9 @@ best_params_list_svm <- list(
 saveRDS(best_params_list_svm, cache_params_svm)
 saveRDS(grid_results_svm, cache_grid_svm)
 
-# Save scaling params and test data (needed for evaluation)
+# Save scaled test data (needed for evaluation)
 scaling_params_svm <- list(
-  X_test = X_test_svm,
+  X_test = X_test_svm_scaled,
   y_test = y_test_svm
 )
 saveRDS(scaling_params_svm, cache_scaling_svm)
@@ -1006,13 +1032,13 @@ saveRDS(scaling_params_svm, cache_scaling_svm)
 cat("[CACHE] Model saved to:", cache_model_svm, "\n")
 cat("[CACHE] Best params saved to:", cache_params_svm, "\n")
 cat("[CACHE] Grid results saved to:", cache_grid_svm, "\n")
-cat("[CACHE] Scaling params saved to:", cache_scaling_svm, "\n")
+cat("[CACHE] Scaled test data saved to:", cache_scaling_svm, "\n")
 
 }
 
 # ----Test evaluation----
 
-pred_svm <- predict(svm_fit, newdata = X_test_svm, probability = TRUE)
+pred_svm <- predict(svm_fit, newdata = X_test_svm_scaled, probability = TRUE)
 cm_svm <- table(Predicted = pred_svm, Actual = y_test_svm)
 
 # Metrics
@@ -1129,14 +1155,7 @@ cat("[INFO] Split:", nrow(train_df), "train,", nrow(test_df), "test\n")
 
 test_df[[stop_var]] <- factor(test_df[[stop_var]], levels = levels(train_df[[stop_var]]))
 
-# ----One-hot encoding----
-
-x_cols <- setdiff(names(train_df), stop_var)
-dv <- dummyVars(as.formula(paste(stop_var, "~ .")), data = train_df, fullRank = TRUE)
-train_x_enc <- as.data.frame(predict(dv, newdata = train_df))
-test_x_enc  <- as.data.frame(predict(dv, newdata = test_df))
-cat("[INFO] Encoded dims - train:", nrow(train_x_enc), "x", ncol(train_x_enc),
-    "; test:", nrow(test_x_enc), "x", ncol(test_x_enc), "\n")
+cat("[INFO] One-hot encoding will be fitted separately within each CV fold to prevent leakage\n")
 
 # ----Metrics----
 
@@ -1210,12 +1229,20 @@ dt_cv_bayes <- function(cp, maxdepth, minsplit, minbucket) {
 
   for (fold_idx in 1:5) {
     val_idx <- folds_dt[[fold_idx]]
-    train_idx <- setdiff(1:nrow(train_x_enc), val_idx)
+    train_idx <- setdiff(seq_len(nrow(train_df)), val_idx)
+
+    # One-hot encode within this fold (fit on training fold, transform both)
+    train_fold_df <- train_df[train_idx, ]
+    val_fold_df <- train_df[val_idx, ]
+
+    dv_fold <- dummyVars(as.formula(paste(stop_var, "~ .")), data = train_fold_df, fullRank = TRUE)
+    train_x_fold <- as.data.frame(predict(dv_fold, newdata = train_fold_df))
+    val_x_fold <- as.data.frame(predict(dv_fold, newdata = val_fold_df))
 
     # Train Decision Tree
     model <- rpart::rpart(
-      train_df[[stop_var]][train_idx] ~ .,
-      data = as.data.frame(train_x_enc[train_idx, ]),
+      train_fold_df[[stop_var]] ~ .,
+      data = train_x_fold,
       method = "class",
       control = rpart.control(
         cp = cp,
@@ -1227,8 +1254,8 @@ dt_cv_bayes <- function(cp, maxdepth, minsplit, minbucket) {
     )
 
     # Predict on validation fold
-    pred_val <- predict(model, as.data.frame(train_x_enc[val_idx, ]), type = "class")
-    actual_val <- train_df[[stop_var]][val_idx]
+    pred_val <- predict(model, val_x_fold, type = "class")
+    actual_val <- val_fold_df[[stop_var]]
 
     # Calculate metrics
     metrics <- macro_metrics(actual_val, pred_val)
@@ -1314,9 +1341,18 @@ print(best_params_dt)
 
 # ----Train final model with best params----
 
+cat("[INFO] Encoding full training and test sets for final model...\n")
+
+# One-hot encode full training and test sets (fit on full training set)
+dv_final <- dummyVars(as.formula(paste(stop_var, "~ .")), data = train_df, fullRank = TRUE)
+train_x_enc_final <- as.data.frame(predict(dv_final, newdata = train_df))
+test_x_enc_final <- as.data.frame(predict(dv_final, newdata = test_df))
+
+cat("[INFO] Training final Decision Tree model...\n")
+
 final_model_dt <- rpart::rpart(
   train_df[[stop_var]] ~ .,
-  data = as.data.frame(train_x_enc),
+  data = train_x_enc_final,
   method = "class",
   control = rpart.control(
     cp = best_params_dt$cp,
@@ -1344,7 +1380,7 @@ saveRDS(bayes_out_dt, cache_bayes_dt)
 
 # Save test data (needed for evaluation)
 test_data_list_dt <- list(
-  test_x_enc = test_x_enc,
+  test_x_enc = test_x_enc_final,
   test_df = test_df,
   stop_var = stop_var
 )
@@ -1359,7 +1395,7 @@ cat("[CACHE] Test data saved to:", cache_test_data_dt, "\n")
 
 # ----Test evaluation----
 
-test_pred <- predict(final_model_dt, as.data.frame(test_x_enc), type = "class")
+test_pred <- predict(final_model_dt, test_x_enc_final, type = "class")
 te <- macro_metrics(test_df[[stop_var]], test_pred)
 
 # Log to file
@@ -1427,11 +1463,11 @@ if (!FORCE_RETRAIN && file.exists(cache_model_xgb) && file.exists(cache_params_x
 
   # Load test data (raw matrices, not DMatrix)
   test_data_list_xgb <- readRDS(cache_test_data_xgb)
-  X_test <- test_data_list_xgb$X_test
+  X_test_final <- test_data_list_xgb$X_test
   y_test <- test_data_list_xgb$y_test
 
   # Reconstruct DMatrix (can't serialize/deserialize DMatrix objects)
-  dtest <- xgb.DMatrix(data = X_test, label = y_test)
+  dtest_final <- xgb.DMatrix(data = X_test_final, label = y_test)
 
   cat(sprintf("[CACHE] Loaded: depth=%d, eta=%.4f, subsample=%.2f, colsample=%.2f, child_wt=%.1f, gamma=%.2f, CV Macro F1=%.4f\n",
               best_params_bayes$max_depth, best_params_bayes$eta, best_params_bayes$subsample,
@@ -1472,16 +1508,7 @@ train_df <- df[idx, , drop = FALSE]
 test_df  <- df[-idx, , drop = FALSE]
 cat("[INFO] Split:", nrow(train_df), "train,", nrow(test_df), "test\n")
 
-# ----Mixed encoding (target + one-hot)----
-
-target_encode <- function(train_vec, test_vec, train_y, global_mean) {
-  enc_map <- tapply(train_y, train_vec, mean, na.rm = TRUE)
-  train_enc <- enc_map[as.character(train_vec)]
-  test_enc <- enc_map[as.character(test_vec)]
-  train_enc[is.na(train_enc)] <- global_mean
-  test_enc[is.na(test_enc)] <- global_mean
-  list(train = train_enc, test = test_enc)
-}
+# ----Identify column types for encoding (done once)----
 
 num_cols <- names(train_df)[sapply(train_df, is.numeric) & names(train_df) != stop_var]
 cat_cols <- names(train_df)[sapply(train_df, function(x) is.character(x) || is.factor(x))]
@@ -1493,74 +1520,97 @@ cardinality <- sapply(train_df[cat_cols], function(x) {
 high_card <- names(cardinality)[cardinality > 50]
 low_card <- names(cardinality)[cardinality <= 50]
 
-cat(sprintf("[INFO] Encoding: %d high-card (target), %d low-card (one-hot)\n",
+cat(sprintf("[INFO] Encoding strategy: %d high-card (target), %d low-card (one-hot)\n",
             length(high_card), length(low_card)))
+cat("[INFO] Encoding will be fitted separately within each CV fold to prevent leakage\n")
 
-train_enc_list <- list()
-test_enc_list <- list()
-target_num <- as.numeric(train_df[[stop_var]]) - 1
-global_mean <- mean(target_num, na.rm = TRUE)
+# ----Define encoding function (will be called per-fold)----
 
-if (length(high_card) > 0) {
-  for (col in high_card) {
-    enc <- target_encode(train_df[[col]], test_df[[col]], target_num, global_mean)
-    train_enc_list[[paste0(col, "_te")]] <- enc$train
-    test_enc_list[[paste0(col, "_te")]] <- enc$test
-  }
-}
-
-if (length(low_card) > 0) {
-  for (col in low_card) {
-    train_df[[col]] <- as.factor(train_df[[col]])
-    test_df[[col]] <- as.factor(test_df[[col]])
+encode_fold_data <- function(train_fold_df, val_fold_df, test_df, high_card, low_card, num_cols, stop_var) {
+  # Encoding function
+  target_encode <- function(train_vec, test_vec, train_y, global_mean) {
+    enc_map <- tapply(train_y, train_vec, mean, na.rm = TRUE)
+    train_enc <- enc_map[as.character(train_vec)]
+    test_enc <- enc_map[as.character(test_vec)]
+    train_enc[is.na(train_enc)] <- global_mean
+    test_enc[is.na(test_enc)] <- global_mean
+    list(train = train_enc, test = test_enc)
   }
 
-  train_mat <- model.matrix(~ . - 1, data = train_df[, low_card, drop = FALSE])
-  test_mat <- model.matrix(~ . - 1, data = test_df[, low_card, drop = FALSE])
+  train_enc_list <- list()
+  val_enc_list <- list()
+  test_enc_list <- list()
 
-  missing <- setdiff(colnames(train_mat), colnames(test_mat))
-  if (length(missing) > 0) {
-    for (m in missing) {
-      test_mat <- cbind(test_mat, 0)
-      colnames(test_mat)[ncol(test_mat)] <- m
+  target_num <- as.numeric(train_fold_df[[stop_var]]) - 1
+  global_mean <- mean(target_num, na.rm = TRUE)
+
+  # Target encoding for high cardinality
+  if (length(high_card) > 0) {
+    for (col in high_card) {
+      enc_train_val <- target_encode(train_fold_df[[col]], val_fold_df[[col]], target_num, global_mean)
+      enc_test <- target_encode(train_fold_df[[col]], test_df[[col]], target_num, global_mean)
+      train_enc_list[[paste0(col, "_te")]] <- enc_train_val$train
+      val_enc_list[[paste0(col, "_te")]] <- enc_train_val$test
+      test_enc_list[[paste0(col, "_te")]] <- enc_test$test
     }
   }
-  test_mat <- test_mat[, colnames(train_mat)]
 
-  for (i in 1:ncol(train_mat)) {
-    train_enc_list[[colnames(train_mat)[i]]] <- train_mat[, i]
-    test_enc_list[[colnames(train_mat)[i]]] <- test_mat[, i]
+  # One-hot encoding for low cardinality
+  if (length(low_card) > 0) {
+    train_fold_cat <- train_fold_df[, low_card, drop = FALSE]
+    val_fold_cat <- val_fold_df[, low_card, drop = FALSE]
+    test_cat <- test_df[, low_card, drop = FALSE]
+
+    for (col in low_card) {
+      train_fold_cat[[col]] <- as.factor(train_fold_cat[[col]])
+      val_fold_cat[[col]] <- factor(val_fold_cat[[col]], levels = levels(train_fold_cat[[col]]))
+      test_cat[[col]] <- factor(test_cat[[col]], levels = levels(train_fold_cat[[col]]))
+    }
+
+    train_mat <- model.matrix(~ . - 1, data = train_fold_cat)
+    val_mat <- model.matrix(~ . - 1, data = val_fold_cat)
+    test_mat <- model.matrix(~ . - 1, data = test_cat)
+
+    # Align columns
+    val_mat <- val_mat[, colnames(train_mat), drop = FALSE]
+    test_mat <- test_mat[, colnames(train_mat), drop = FALSE]
+
+    for (i in 1:ncol(train_mat)) {
+      train_enc_list[[colnames(train_mat)[i]]] <- train_mat[, i]
+      val_enc_list[[colnames(train_mat)[i]]] <- val_mat[, i]
+      test_enc_list[[colnames(train_mat)[i]]] <- test_mat[, i]
+    }
   }
+
+  # Combine numeric + encoded features
+  train_final <- train_fold_df[, num_cols, drop = FALSE]
+  val_final <- val_fold_df[, num_cols, drop = FALSE]
+  test_final <- test_df[, num_cols, drop = FALSE]
+
+  for (fn in names(train_enc_list)) {
+    train_final[[fn]] <- train_enc_list[[fn]]
+    val_final[[fn]] <- val_enc_list[[fn]]
+    test_final[[fn]] <- test_enc_list[[fn]]
+  }
+
+  list(
+    X_train = as.matrix(train_final),
+    X_val = as.matrix(val_final),
+    X_test = as.matrix(test_final)
+  )
 }
 
-train_final <- train_df[, c(num_cols, stop_var), drop = FALSE]
-test_final <- test_df[, c(num_cols, stop_var), drop = FALSE]
-for (fn in names(train_enc_list)) {
-  train_final[[fn]] <- train_enc_list[[fn]]
-  test_final[[fn]] <- test_enc_list[[fn]]
-}
+# ----Prepare target variable----
 
-cat(sprintf("[INFO] Final features: %d\n", ncol(train_final) - 1))
+y_train <- as.numeric(train_df[[stop_var]]) - 1
+y_test <- as.numeric(test_df[[stop_var]]) - 1
 
-# ----Prepare XGBoost data----
-
-X_train <- as.matrix(train_final[, setdiff(names(train_final), stop_var)])
-y_train <- as.numeric(train_final[[stop_var]]) - 1
-X_test <- as.matrix(test_final[, setdiff(names(test_final), stop_var)])
-y_test <- as.numeric(test_final[[stop_var]]) - 1
-
-# Calculate class weights for imbalanced data
+# Calculate class weights for imbalanced data (will be applied per fold)
 class_counts <- table(y_train)
 n_samples <- length(y_train)
 n_classes <- length(class_counts)
 class_weights <- n_samples / (n_classes * class_counts)
 class_weights <- as.numeric(class_weights)
-
-# Assign weights to each sample based on its class
-sample_weights <- class_weights[y_train + 1]
-
-dtrain <- xgb.DMatrix(data = X_train, label = y_train, weight = sample_weights)
-dtest <- xgb.DMatrix(data = X_test, label = y_test)
 
 # ----Bayesian optimization with parallel CV----
 
@@ -1627,14 +1677,34 @@ xgb_cv_bayes <- function(max_depth, eta, subsample, colsample_bytree, min_child_
   cv_start <- Sys.time()
 
   # Parallel CV across folds - collect detailed metrics
+  # NOTE: Encoding is done INSIDE each fold to prevent data leakage
   cv_results <- foreach(fold_idx = 1:5, .packages = c("xgboost"),
-                        .combine = rbind, .export = c("folds", "X_train", "y_train", "sample_weights", "params")) %dopar% {
+                        .combine = rbind,
+                        .export = c("folds", "train_df", "test_df", "y_train", "class_weights", "params",
+                                    "encode_fold_data", "high_card", "low_card", "num_cols", "stop_var")) %dopar% {
     val_idx <- folds[[fold_idx]]
-    train_idx <- setdiff(1:nrow(X_train), val_idx)
+    train_idx <- setdiff(seq_len(nrow(train_df)), val_idx)
 
-    dtrain_cv <- xgb.DMatrix(data = X_train[train_idx, ], label = y_train[train_idx],
-                             weight = sample_weights[train_idx])
-    dval_cv <- xgb.DMatrix(data = X_train[val_idx, ], label = y_train[val_idx])
+    # Encode data for this fold (fit on train fold, transform train and val folds)
+    encoded <- encode_fold_data(
+      train_fold_df = train_df[train_idx, ],
+      val_fold_df = train_df[val_idx, ],
+      test_df = test_df,  # Not used in CV, but needed for function signature
+      high_card = high_card,
+      low_card = low_card,
+      num_cols = num_cols,
+      stop_var = stop_var
+    )
+
+    X_train_fold <- encoded$X_train
+    X_val_fold <- encoded$X_val
+
+    # Apply class weights
+    sample_weights_fold <- class_weights[y_train[train_idx] + 1]
+
+    dtrain_cv <- xgb.DMatrix(data = X_train_fold, label = y_train[train_idx],
+                             weight = sample_weights_fold)
+    dval_cv <- xgb.DMatrix(data = X_val_fold, label = y_train[val_idx])
 
     model_cv <- xgb.train(
       params = params,
@@ -1800,7 +1870,31 @@ cat(sprintf("\n[Best CV Macro F1]: %.4f\n", best_score))
 cat("[Best Params]\n")
 print(best_params_bayes)
 
-# ----Train final model----
+# ----Train final model on full training set----
+
+cat("\n[INFO] Encoding full training and test sets for final model...\n")
+
+# Encode full training and test sets (fit on full training set)
+final_encoded <- encode_fold_data(
+  train_fold_df = train_df,
+  val_fold_df = test_df,  # "val" is actually test set here
+  test_df = test_df,  # Not used, but needed for function signature
+  high_card = high_card,
+  low_card = low_card,
+  num_cols = num_cols,
+  stop_var = stop_var
+)
+
+X_train_final <- final_encoded$X_train
+X_test_final <- final_encoded$X_val  # "val" output is the test set
+
+# Apply class weights to full training set
+sample_weights_final <- class_weights[y_train + 1]
+
+dtrain_final <- xgb.DMatrix(data = X_train_final, label = y_train, weight = sample_weights_final)
+dtest_final <- xgb.DMatrix(data = X_test_final, label = y_test)
+
+cat("[INFO] Training final model with best hyperparameters...\n")
 
 final_params <- list(
   objective = "multi:softprob",
@@ -1817,9 +1911,9 @@ final_params <- list(
 
 final_model <- xgb.train(
   params = final_params,
-  data = dtrain,
+  data = dtrain_final,
   nrounds = 100,
-  watchlist = list(train = dtrain),
+  watchlist = list(train = dtrain_final),
   early_stopping_rounds = 10,
   verbose = 0
 )
@@ -1843,7 +1937,7 @@ saveRDS(bayes_out, cache_bayes_xgb)
 # Save test data (needed for evaluation)
 # Note: Save raw matrices, not DMatrix (DMatrix can't be serialized)
 test_data_list_xgb <- list(
-  X_test = X_test,
+  X_test = X_test_final,
   y_test = y_test
 )
 saveRDS(test_data_list_xgb, cache_test_data_xgb)
@@ -1860,7 +1954,6 @@ cat("[CACHE] Test data saved to:", cache_test_data_xgb, "\n")
 cat("\n=== Extracting Feature Importance ===\n")
 
 importance_matrix <- xgb.importance(
-  feature_names = colnames(X_train),
   model = final_model
 )
 
@@ -1886,7 +1979,7 @@ print(head(importance_matrix, 5))
 
 # ----Test evaluation----
 
-pred_prob <- predict(final_model, dtest, reshape = TRUE)
+pred_prob <- predict(final_model, dtest_final, reshape = TRUE)
 pred_class <- max.col(pred_prob) - 1
 
 lev <- sort(unique(c(y_test, pred_class)))
