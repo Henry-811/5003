@@ -9,6 +9,7 @@ output:
     smaller: false
     transition: faster
     css: custom.css
+    self_contained: true
 ---
 
 ```{r setup, include=FALSE}
@@ -42,34 +43,30 @@ theme_set(theme_minimal(base_size = 14))
 - Inform infrastructure investment decisions
 - Enable targeted policy interventions
 
----
+## Initial Dataset
 
-## Week 7: Initial Dataset
-
-<div class="columns-2" style="font-size: 18px; line-height: 1.6;">
+<div class="columns-2" style="font-size: 24px; line-height: 1.8;">
 
 <div>
-**Dataset Overview**
+<div style="font-size: 24px; font-weight: 700; color: #E74C3C; margin-bottom: 15px;">Dataset Overview</div>
 
-- <span style="color: #E74C3C; font-weight: 700; font-size: 18px;">Source:</span> <span style="font-size: 18px;">2015 Gold Coast Survey</span>
-- <span style="color: #E74C3C; font-weight: 700; font-size: 18px;">Size:</span> <span style="font-size: 18px;">22,587 observations</span>
-- <span style="color: #E74C3C; font-weight: 700; font-size: 18px;">Variables:</span> <span style="font-size: 18px;">179 → 163</span>
+- <span style="color: #E74C3C; font-weight: 700;">Source:</span> 2015 Gold Coast Survey
+- <span style="color: #E74C3C; font-weight: 700;">Size:</span> 22,587 observations
+- <span style="color: #E74C3C; font-weight: 700;">Variables:</span> 179 → 163
 </div>
 
 <div>
-**Key Challenges Identified**
+<div style="font-size: 24px; font-weight: 700; color: #E74C3C; margin-bottom: 15px;">Key Challenges Identified</div>
 
-1. <span style="color: #E74C3C; font-weight: 700; font-size: 18px;">Missing values:</span> <span style="font-size: 18px;">Up to 99%</span>
-2. <span style="color: #E74C3C; font-weight: 700; font-size: 18px;">Class imbalance:</span> <span style="font-size: 18px;">80%+ vehicle</span>
-3. <span style="color: #E74C3C; font-weight: 700; font-size: 18px;">Outliers:</span> <span style="font-size: 18px;">20+ variables >1%</span>
-4. <span style="color: #E74C3C; font-weight: 700; font-size: 18px;">Data leakage:</span> <span style="font-size: 18px;">Vehicle attributes</span>
+- <span style="color: #E74C3C; font-weight: 700;">Missing values:</span> Up to 99%
+- <span style="color: #E74C3C; font-weight: 700;">Class imbalance:</span> 80%+ vehicle
+- <span style="color: #E74C3C; font-weight: 700;">Outliers:</span> 20+ variables >1%
+- <span style="color: #E74C3C; font-weight: 700;">Data leakage:</span> Vehicle attributes
 </div>
 
 </div>
 
----
-
-## Week 7: Exploratory Analysis
+## Exploratory Data Analysis
 
 ```{r week7-class-distribution, fig.height=5.5, fig.width=10}
 # Actual class distribution from Week 7 dataset (STOP_MAINMODE)
@@ -78,7 +75,7 @@ mode_data <- data.frame(
            "Public Bus", "School Bus", "Train", "Other",
            "Ferry", "Motorcycle", "Taxi", "Plane", "Other Bus"),
   Count = c(13176, 5146, 2919, 303, 247, 223, 194, 164, 79, 73, 42, 13, 8),
-  Percentage = c(58.3, 22.8, 12.9, 1.3, 1.1, 1.0, 0.9, 0.7, 0.3, 0.3, 0.2, 0.1, 0.0)
+  Percentage = c(58.30, 22.80, 12.90, 1.30, 1.10, 1.00, 0.90, 0.70, 0.30, 0.30, 0.20, 0.10, 0.04)
 )
 
 ggplot(mode_data, aes(x = reorder(Mode, -Count), y = Count, fill = Mode)) +
@@ -99,10 +96,34 @@ ggplot(mode_data, aes(x = reorder(Mode, -Count), y = Count, fill = Mode)) +
 <div style="font-size: 18px; margin-top: -10px;">
 **Key Finding:** Severe class imbalance - dominant vehicle usage requires careful handling
 </div>
+## EDA: Feature-Target Correlation
 
----
+```{r eda-correlation, out.width="70%", fig.align="center"}
+knitr::include_graphics("figures/3c3e076a79850f23c0094572ba325240.png")
+```
 
-## Week 7: Key Findings
+<div style="font-size: 18px; margin-top: 10px;">
+**Finding:** Vehicle features (VEH_VEHYEAR, STOP_NETWORK_DIST) show strongest correlation with travel mode
+</div>
+## EDA: Categorical Features
+
+```{r eda-categorical, out.width="70%", fig.align="center"}
+knitr::include_graphics("figures/d172ed278a286e7a685cdc0525ae8745.png")
+```
+
+<div style="font-size: 18px; margin-top: 10px;">
+**Finding:** STOP_FULLMODE, VEH_RUNNINGCOST, PERS_NOLICENCE strongly associated with mode choice
+</div>
+## EDA: Feature Collinearity
+
+```{r eda-collinearity, out.width="70%", fig.align="center"}
+knitr::include_graphics("figures/ba6cbae66ca1b8a816d387e535619f89.png")
+```
+
+<div style="font-size: 18px; margin-top: 10px;">
+**Finding:** High multicollinearity detected among vehicle attributes (hierarchical clustering)
+</div>
+## Key Findings from EDA
 
 **Top Predictive Features (from EDA)**
 
@@ -113,62 +134,54 @@ ggplot(mode_data, aes(x = reorder(Mode, -Count), y = Count, fill = Mode)) +
   - `STOP_FULLMODE` (1.0 - data leakage!)
   - `PERS_NOLICENCE`, `VEH_RUNNINGCOST`
 
-**Evaluation Plan Established:**
+**Key Insight:** Vehicle proxies dominated predictions → Need to remove for real-world applicability
 
-- Macro-F1 (handles imbalance)
-- Precision & Recall per class
-- Confusion matrix analysis
-- 5-fold cross-validation
-
----
-
-## Instructor Feedback & Our Response
+## Feature Selection & Engineering
 
 <div style="font-size: 18px; line-height: 1.7;">
 
 <div style="background-color: #ECF0F1; padding: 15px; margin-bottom: 20px; border-left: 5px solid #3498DB;">
-<span style="color: #E74C3C; font-weight: 700; font-size: 18px;">Week 7 Feedback:</span>
-<span style="font-size: 18px;">"Consider removing variables that are direct proxies for the outcome (such as vehicle attributes)"</span>
+<span style="color: #E74C3C; font-weight: 700; font-size: 18px;">EDA Insight:</span>
+<span style="font-size: 18px;">Vehicle attributes dominated predictions - these are direct proxies that reveal the answer</span>
 </div>
 
-<span style="color: #E74C3C; font-weight: 700; font-size: 20px;">Our Action: Policy-Focused Dataset Transformation</span>
+<div style="margin-top: 20px; margin-bottom: 15px;">
+<span style="color: #E74C3C; font-weight: 700; font-size: 20px;">Our Approach:</span>
+</div>
 
-<div style="margin-top: 15px;">
+<div style="margin-top: 10px;">
 
 **❌ Removed 81 variables (163 → 92 columns)**
 
-- 25 vehicle proxies (VEH_VEHTYPE, STOP_VEHOCCUP, fuel types)
-- 54 administrative variables (IDs, timestamps, survey metadata)
-- 2 low-value variables (94% identical values)
+- 25 vehicle proxies (VEH_VEHTYPE, fuel types - reveal the answer)
+- 54 administrative variables (person IDs, timestamps - don't affect travel choice)
+- 2 low-value variables (94% identical values - no variation to learn from)
 
 **➕ Added 9 engineered features**
 
-- VEH_PER_PERSON, VEH_PER_ADULT (availability ratios)
-- TRIP_SPEED, TIME_PERIOD, IS_WEEKEND (temporal features)
-- DIST_CATEGORY, HAS_LICENSE_AND_CAR (behavioral features)
+- VEH_PER_PERSON, VEH_PER_ADULT (household vehicle availability)
+- TRIP_SPEED, TIME_PERIOD, IS_WEEKEND (trip timing characteristics)
+- DIST_CATEGORY, HAS_LICENSE_AND_CAR (travel capability indicators)
 
 </div>
 
 </div>
-
----
-
-## Policy-Focused Dataset
+## Dataset Transformation
 
 ```{r preprocessing-summary, fig.height=4.5, fig.width=10}
-# Before/After comparison showing all variable categories
+# Before/After comparison - focus on data leakage removal
 preprocessing_data <- data.frame(
-  Category = c("Week 7 Total", "Vehicle Proxies\n(Leakage)", "Admin Variables\n(IDs, metadata)",
-               "Low-Value\nVariables", "Final Dataset"),
-  Count = c(163, 25, 54, 2, 92),
-  Type = c("Before", "Removed", "Removed", "Removed", "After")
+  Dataset = rep(c("Initial Dataset", "After Cleaning"), each = 2),
+  Category = rep(c("Total Variables", "Vehicle Proxies"), 2),
+  Count = c(163, 25,  # Before: 163 total, 25 proxies
+            92, 0)     # After: 92 total, 0 proxies (removed 81 total, added 9)
 )
 
 ggplot(preprocessing_data, aes(x = Category, y = Count, fill = Dataset)) +
   geom_col(position = "dodge", width = 0.7) +
   geom_text(aes(label = Count), position = position_dodge(width = 0.7),
             vjust = -0.5, size = 5, fontface = "bold") +
-  scale_fill_manual(values = c("Week 7 Baseline" = "#E74C3C",
+  scale_fill_manual(values = c("Initial Dataset" = "#E74C3C",
                                  "After Cleaning" = "#27AE60")) +
   scale_y_continuous(limits = c(0, 180), expand = expansion(mult = c(0, 0.05))) +
   labs(title = "Dataset Transformation: Removing Data Leakage",
@@ -181,251 +194,198 @@ ggplot(preprocessing_data, aes(x = Category, y = Count, fill = Dataset)) +
         plot.title = element_text(size = 16, face = "bold"))
 ```
 
-<div style="font-size: 18px;">
+<div style="font-size: 16px; color: #7F8C8D; margin-top: -5px;">
+*Chart shows vehicle proxy removal; also removed 56 variables irrelevant to travel choice (survey IDs, timestamps, low-variance)*
+</div>
+
+<div style="font-size: 18px; margin-top: 10px;">
 <span style="color: #E74C3C; font-weight: 700; font-size: 18px;">Key Distinction:</span> <span style="font-size: 18px;">Kept `HH_CARS` (availability) ✓ | Removed `VEH_VEHTYPE` (usage) ✗</span>
 </div>
+## Model Selection
 
----
+<div style="font-size: 18px; line-height: 1.7;">
 
-## Model Implementation
+**These are 5 models we choose:** Random Forest, XGBoost, GLM-NET, SVM, Decision Tree
 
-<div class="columns-2">
+<div style="margin-top: 20px;">
 
-<div style="font-size: 18px;">
+**Why These 5 Models?**
 
-**5 Classification Models**
+<div style="margin-top: 15px;">
 
-1. **Random Forest**
-   - Grid search (mtry, min_n, trees)
-   - Class weighting for imbalance
-
-2. **GLM-NET**
-   - Elastic net regularization
-   - Bayesian optimization
-
-3. **SVM**
-   - RBF kernel
-   - Grid search (cost, gamma)
-
-4. **Decision Tree**
-   - Bayesian optimization (22 iterations)
-   - Complexity parameter tuning
-
-5. **XGBoost**
-   - Gradient boosting
-   - Bayesian optimization (22 iterations)
+- **Diverse Approaches:** Tree-based (RF, XGBoost, DT), Linear (GLM-NET), Kernel-based (SVM)
+- **Handle Class Imbalance:** All support class weighting or rebalancing techniques
+- **Interpretability vs Performance:** From simple (Decision Tree) to complex (XGBoost)
+- **Industry Standard:** Widely used for multi-class classification in transport research
 
 </div>
 
-<div style="font-size: 18px;">
+</div>
 
 **Common Setup**
 
-- Same 92-column dataset
-- 80/20 train/test split
-- Stratified sampling
+- Same 92-column policy-focused dataset
+- 80/20 train/test split with stratified sampling
 - 5-fold cross-validation
-- Macro-F1 optimization
+- Macro-F1 optimization (equal weight to all modes)
+
+</div>
+## Model Implementation
+
+<div style="font-size: 22px; line-height: 1.8;">
+
+**5 Classification Models Trained**
+
+<div style="margin-top: 25px;">
+
+- **Random Forest:** Grid search (mtry, min_n, trees) with class weighting
+- **XGBoost:** Gradient boosting with Bayesian optimization (22 iterations)
+- **GLM-NET:** Elastic net regularization with Bayesian optimization
+- **SVM:** RBF kernel with Grid search (cost, gamma)
+- **Decision Tree:** Bayesian optimization (22 iterations) with complexity tuning
+
+</div>
+
+**Evaluation Strategy**
+
+<div style="margin-top: 15px;">
+
+- **Macro-F1 Score:** Handles class imbalance by giving equal weight to all modes
+- **5-fold Cross-Validation:** Ensures robust performance estimates
+- **Stratified Sampling:** Maintains class distribution across folds
 
 </div>
 
 </div>
-
----
-
 ## Model Performance Comparison
 
 ```{r model-performance, fig.height=5, fig.width=10}
-# ACTUAL model performance results from optimization logs and Team Models.Rmd
+# ACTUAL model performance results from optimization logs
 model_results <- data.frame(
   Model = c("Random Forest", "XGBoost", "GLM-NET", "SVM", "Decision Tree"),
   Accuracy = c(0.9258, 0.9399, 0.9052, 0.7702, 0.8862),
-  Macro_F1 = c(0.7153, 0.8476, 0.6225, 0.5031, 0.4311),
-  Training_Time_min = c(1.4, 21.6, 36.3, 15.6, 5.6)
+  `Macro-F1` = c(0.7153, 0.8476, 0.6225, 0.5031, 0.4311),
+  `Macro-Precision` = c(0.9410, 0.8718, 0.7297, 0.5762, 0.4462),
+  `Macro-Recall` = c(0.6147, 0.8527, 0.5890, 0.2438, 0.4266),
+  check.names = FALSE
 )
 
 # Reshape for plotting
 model_metrics <- model_results %>%
-  pivot_longer(cols = c(Accuracy, Macro_F1),
+  pivot_longer(cols = c(Accuracy, `Macro-F1`, `Macro-Precision`, `Macro-Recall`),
                names_to = "Metric",
                values_to = "Score")
 
-ggplot(model_metrics, aes(x = reorder(Model, Score), y = Score, fill = Metric)) +
-  geom_col(position = "dodge", width = 0.7) +
+# Grouped by Metric - x-axis = Metric, colored bars = Models
+ggplot(model_metrics, aes(x = Metric, y = Score, fill = Model)) +
+  geom_col(position = "dodge", width = 0.75) +
   geom_text(aes(label = sprintf("%.2f", Score)),
-            position = position_dodge(width = 0.7),
-            hjust = -0.2, size = 4.5, fontface = "bold") +
-  coord_flip() +
-  scale_fill_manual(values = c("Accuracy" = "#3498DB", "Macro_F1" = "#E67E22"),
-                    labels = c("Accuracy", "Macro-F1")) +
-  scale_y_continuous(limits = c(0, 1.05), labels = percent_format(),
-                     expand = expansion(mult = c(0, 0))) +
-  labs(title = "Model Performance on Policy-Focused Dataset",
-       x = NULL, y = "Score") +
+            position = position_dodge(width = 0.75),
+            vjust = -0.3, size = 3.3, fontface = "bold") +
+  scale_fill_manual(values = c("XGBoost" = "#E67E22",
+                                 "Random Forest" = "#3498DB",
+                                 "GLM-NET" = "#9B59B6",
+                                 "SVM" = "#E74C3C",
+                                 "Decision Tree" = "#1ABC9C")) +
+  scale_y_continuous(limits = c(0, 1.05),
+                     labels = function(x) sprintf("%.2f", x),
+                     expand = expansion(mult = c(0, 0)),
+                     breaks = seq(0, 1, 0.25)) +
+  labs(x = NULL, y = "Score") +
   theme(legend.position = "top",
         legend.title = element_blank(),
-        legend.text = element_text(size = 14),
-        axis.text.y = element_text(size = 13),
+        legend.text = element_text(size = 13),
         axis.text.x = element_text(size = 12),
-        axis.title = element_text(size = 13),
-        plot.title = element_text(size = 16, face = "bold"),
-        plot.margin = margin(10, 40, 10, 10))
-```
-
-<div style="font-size: 18px;">
-<span style="color: #E74C3C; font-weight: 700; font-size: 18px;">Best:</span> <span style="font-size: 18px;">XGBoost (Acc: 94%, F1: 0.85)</span> | <span style="color: #E74C3C; font-weight: 700; font-size: 18px;">Fastest:</span> <span style="font-size: 18px;">Random Forest (1.4 min)</span>
-</div>
-
----
-
-## Feature Importance: Consensus Analysis
-
-```{r feature-importance, fig.height=5, fig.width=10}
-# Consensus features from analyze_feature_importance.R
-# NOTE: Run scripts/analyze_feature_importance.R first to get actual results
-# These are example features based on typical importance patterns
-
-consensus_features <- data.frame(
-  Feature = c("TRIP_NETWORK_DIST", "TIME_PERIOD", "HH_CARS",
-              "STOP_DEPHR", "PERS_AGE", "VEH_PER_PERSON",
-              "TRIP_SPEED", "HAS_LICENSE_AND_CAR", "IS_WEEKEND", "DIST_CATEGORY"),
-  Avg_Importance = c(0.95, 0.82, 0.78, 0.71, 0.68, 0.65, 0.61, 0.58, 0.52, 0.48),
-  Models_Count = c(4, 4, 4, 3, 3, 3, 3, 2, 2, 2)
-)
-
-ggplot(consensus_features, aes(x = reorder(Feature, Avg_Importance),
-                                y = Avg_Importance,
-                                fill = as.factor(Models_Count))) +
-  geom_col(width = 0.75) +
-  geom_text(aes(label = sprintf("%.2f", Avg_Importance)),
-            hjust = -0.2, size = 3.5, fontface = "bold") +
-  coord_flip() +
-  scale_fill_manual(values = c("2" = "#95A5A6", "3" = "#3498DB", "4" = "#27AE60"),
-                    name = "# Models",
-                    labels = c("2 models", "3 models", "4 models")) +
-  scale_y_continuous(limits = c(0, 1.05), expand = expansion(mult = c(0, 0))) +
-  labs(title = "Top 10 Features: Consensus Across Models",
-       subtitle = "Important in 2+ models (RF, XGBoost, GLM-NET, DT)",
-       x = NULL, y = "Average Normalized Importance") +
-  theme(legend.position = "right",
-        legend.text = element_text(size = 12),
-        legend.title = element_text(size = 13, face = "bold"),
         axis.text.y = element_text(size = 11),
-        axis.text.x = element_text(size = 11),
-        axis.title = element_text(size = 12),
-        plot.title = element_text(size = 15, face = "bold"),
-        plot.subtitle = element_text(size = 11),
-        plot.margin = margin(10, 30, 10, 10))
+        axis.title.y = element_text(size = 12),
+        plot.margin = margin(5, 15, 5, 5))
 ```
 
-<div style="font-size: 18px;">
-<span style="color: #E74C3C; font-weight: 700; font-size: 18px;">Key Shift:</span> <span style="font-size: 18px;">Vehicle proxies → Behavioral features (distance, time, household)</span>
+<div style="font-size: 18px; margin-top: 5px;">
+<span style="color: #E74C3C; font-weight: 700; font-size: 18px;">Key Insight:</span> <span style="font-size: 18px;">XGBoost (orange) best overall balance; Random Forest (blue) highest precision</span>
+</div>
+## Model Details: XGBoost
+
+<div style="display: flex; font-size: 20px; line-height: 1.7; gap: 40px;">
+
+<div style="flex: 1;">
+<div style="font-size: 20px; font-weight: 700; color: #E74C3C; margin-bottom: 15px;">Optimized Hyperparameters</div>
+
+- **max_depth:** 15 (deep trees for complex patterns)
+- **eta (learning rate):** 0.30 (moderate speed)
+- **subsample:** 1.00 (use all data)
+- **colsample_bytree:** 1.00 (use all features)
+- **nrounds:** 100 (boosting iterations)
 </div>
 
----
+<div style="flex: 1;">
+<div style="font-size: 20px; font-weight: 700; color: #E74C3C; margin-bottom: 15px;">Key Findings</div>
 
-## Policy Insights: Distance Patterns
-
-```{r policy-distance, fig.height=5, fig.width=10}
-# From analyze_policy_insights.R - distance-based mode choice
-# NOTE: Run scripts/analyze_policy_insights.R to get actual data
-distance_patterns <- data.frame(
-  Distance = c("Very Short\n(<2 km)", "Short\n(2-5 km)", "Medium\n(5-15 km)",
-               "Long\n(15-30 km)", "Very Long\n(>30 km)"),
-  Sustainable = c(68, 52, 28, 12, 5),
-  Vehicle = c(32, 48, 72, 88, 95)
-)
-
-distance_long <- distance_patterns %>%
-  pivot_longer(cols = c(Sustainable, Vehicle),
-               names_to = "Mode_Category",
-               values_to = "Percentage")
-
-distance_long$Distance <- factor(distance_long$Distance,
-                                  levels = c("Very Short\n(<2 km)", "Short\n(2-5 km)",
-                                            "Medium\n(5-15 km)", "Long\n(15-30 km)",
-                                            "Very Long\n(>30 km)"))
-
-ggplot(distance_long, aes(x = Distance, y = Percentage, fill = Mode_Category)) +
-  geom_col() +
-  geom_text(aes(label = paste0(Percentage, "%")),
-            position = position_stack(vjust = 0.5),
-            color = "white", fontface = "bold", size = 5) +
-  scale_fill_manual(values = c("Sustainable" = "#27AE60", "Vehicle" = "#E74C3C"),
-                    name = "Mode Type") +
-  labs(title = "Mode Choice by Trip Distance",
-       subtitle = "Sustainable modes dominate short trips, vehicles dominate long trips",
-       x = "Trip Distance", y = "Percentage of Trips") +
-  theme(legend.position = "top",
-        legend.title = element_text(size = 13, face = "bold"),
-        legend.text = element_text(size = 12),
-        axis.text = element_text(size = 12),
-        axis.title = element_text(size = 13),
-        plot.title = element_text(size = 16, face = "bold"),
-        plot.subtitle = element_text(size = 11))
-```
-
-<div style="font-size: 18px;">
-<span style="color: #E74C3C; font-weight: 700; font-size: 18px;">Policy Action:</span> <span style="font-size: 18px;">Promote walking/cycling for <5km; improve transit for 5-20km</span>
+- **Balanced Performance:** High recall (0.85) and precision (0.87) across all modes
+- **Handles Rare Classes:** Successfully predicts minority modes despite 80%+ vehicle dominance
+- **Robust to Imbalance:** Macro-F1 of 0.85 confirms equal performance across classes
+- **Excellent Generalization:** Test F1 (0.85) exceeds CV F1 (0.77), showing strong real-world applicability
+- **Identifies Key Factors:** Distance (9.1%), speed (7.0%), and transit access (5.7%) are top predictors
 </div>
 
----
+</div>
+## Evaluation & Limitations
 
-## Policy Insights: Demographic & Temporal
+<div style="font-size: 18px; line-height: 1.6;">
 
-<div class="columns-2">
+**Performance Analysis**
 
-**Demographic Patterns**
+- **XGBoost achieves best balance:** F1=0.85, but Random Forest has higher precision (0.94 vs 0.87)
+- **Why Macro-F1?** Accuracy alone misleading - would achieve 80%+ by always predicting "vehicle"
+- **Strong generalization:** Test F1 (0.85) exceeds CV F1 (0.77) for XGBoost
 
-- **Age:** 18-29 highest sustainable mode use (35%)
-- **License + Car:** 3.2× less likely to use sustainable modes
-- **No car households:** 74% use sustainable modes
+**Limitations**
 
-**Temporal Patterns**
+- **Insufficient data for rare modes:**
+  - Ferry: 79 trips (0.3%), Plane: 13 trips (0.1%), Other Bus: 8 trips (0.0%)
+  - Models struggle to learn patterns with so few samples
 
-- **Weekday:** 32% sustainable vs. 24% weekend
-- **Peak hours:** Higher vehicle dependency (82%)
-- **Off-peak:** More sustainable mode choice (38%)
+- **Real-world deployment challenges:**
+  - Rare mode predictions may be unreliable in practice
+  - Focus on major modes (Vehicle, Walking, Bus, Train) for policy decisions
+
+</div>
+## Conclusion
+
+<div style="font-size: 20px; line-height: 1.7;">
+
+**Key Takeaways:**
+
+- **Data quality is critical:** Removing vehicle proxies improved real-world applicability
+- **Class imbalance is manageable:** Proper techniques (weighting, Macro-F1) handle 80%+ majority class
+- **Model selection matters:** XGBoost outperformed other models for multi-class imbalanced data
+
+**Impact:** Feature importance reveals actionable patterns for targeted policy interventions:
+
+- **Distance-based transit:** Top predictor (9.1%) → Optimize service for specific trip lengths
+- **Speed competitiveness:** Critical factor (7.0%) → Ensure transit is time-competitive
+- **Transit-oriented planning:** Infrastructure access matters (5.7%) → Focus improvements near stations
 
 </div>
 
-**Key Policy Recommendations:**
+</div>
+## Future Directions
 
-1. **Target interventions:** Focus on car-owning households
-2. **Improve peak service:** Enhance frequency during rush hours
-3. **Youth engagement:** Build on existing sustainable habits (18-29 age group)
-4. **Distance thresholds:** Promote cycling for <5km, transit for 5-20km
+<div style="font-size: 22px; line-height: 1.8;">
 
----
+**Next Steps for Deployment:**
 
-## Key Contributions
+- **Geographic targeting:** Apply model to identify specific suburbs with high mode-shift potential
+- **Scenario analysis:** Test proposed interventions (e.g., faster buses, new routes) using model predictions
+- **Real-world partnership:** Collaborate with Gold Coast transport authority for implementation
 
-<div class="build">
+**Model Enhancements:**
 
-**1. Data Quality & Transformation**
-   - Addressed instructor feedback on data leakage
-   - Created policy-focused dataset (163 → 92 variables)
-   - Engineered behavioral features
-
-**2. Comprehensive Modeling**
-   - Implemented 5 optimized classification models
-   - Rigorous hyperparameter tuning (Bayesian/Grid search)
-   - Fair comparison on same dataset
-
-**3. Actionable Insights**
-   - Feature importance consensus across models
-   - Data-driven policy recommendations
-   - Clear demographic & spatial targeting
-
-**4. Reproducible Research**
-   - Complete RMarkdown documentation
-   - Analysis scripts for feature importance & policy insights
-   - Cached models for fast iteration
+- Collect additional data for rare modes (ferry, plane, other bus) to improve predictions
+- Incorporate temporal patterns (seasonal, day-of-week, time-of-day variations)
+- Integrate real-time factors (traffic conditions, weather, service disruptions)
 
 </div>
-
----
-
 ## Questions & Discussion {.flexbox .vcenter}
 
 <div class="centered" style="margin-top: 100px;">
@@ -439,9 +399,6 @@ Any Questions?
 </div>
 
 </div>
-
----
-
 ## Appendix: Optimized Hyperparameters {.smaller}
 
 <div style="font-size: 18px;">
