@@ -166,7 +166,7 @@ knitr::include_graphics("figures/ba6cbae66ca1b8a816d387e535619f89.png")
 </div>
 
 </div>
-## Dataset Transformation
+## Feature Selection & Engineering: Visual Summary
 
 ```{r preprocessing-summary, fig.height=4.5, fig.width=10}
 # Before/After comparison - focus on data leakage removal
@@ -184,8 +184,7 @@ ggplot(preprocessing_data, aes(x = Category, y = Count, fill = Dataset)) +
   scale_fill_manual(values = c("Initial Dataset" = "#E74C3C",
                                  "After Cleaning" = "#27AE60")) +
   scale_y_continuous(limits = c(0, 180), expand = expansion(mult = c(0, 0.05))) +
-  labs(title = "Dataset Transformation: Removing Data Leakage",
-       y = "Number of Variables", x = NULL) +
+  labs(y = "Number of Variables", x = NULL) +
   theme(legend.position = "top",
         legend.title = element_blank(),
         legend.text = element_text(size = 14),
@@ -205,13 +204,15 @@ ggplot(preprocessing_data, aes(x = Category, y = Count, fill = Dataset)) +
 
 <div style="font-size: 18px; line-height: 1.7;">
 
-**These are 5 models we choose:** Random Forest, XGBoost, GLM-NET, SVM, Decision Tree
+<div style="font-size: 22px; font-weight: 700; color: #2C3E50; margin-bottom: 10px;">
+Selected Models: Random Forest, XGBoost, GLM-NET, SVM, Decision Tree
+</div>
 
 <div style="margin-top: 20px;">
 
-**Why These 5 Models?**
+<div style="font-size: 20px; font-weight: 700; color: #E74C3C; margin-bottom: 10px;">Why These 5 Models?</div>
 
-<div style="margin-top: 15px;">
+<div style="margin-top: 10px;">
 
 - **Diverse Approaches:** Tree-based (RF, XGBoost, DT), Linear (GLM-NET), Kernel-based (SVM)
 - **Handle Class Imbalance:** All support class weighting or rebalancing techniques
@@ -222,51 +223,102 @@ ggplot(preprocessing_data, aes(x = Category, y = Count, fill = Dataset)) +
 
 </div>
 
-**Common Setup**
-
-- Same 92-column policy-focused dataset
-- 80/20 train/test split with stratified sampling
-- 5-fold cross-validation
-- Macro-F1 optimization (equal weight to all modes)
-
 </div>
-## Model Implementation
+## Experimental Setup & Evaluation Metrics
 
 <div style="font-size: 22px; line-height: 1.8;">
 
-**5 Classification Models Trained**
+<div style="margin-top: 20px;">
 
-<div style="margin-top: 25px;">
+- **Dataset:** 22,587 trips, 92 features, 13 travel modes
+- **Train/Test Split:** 80/20 ratio with stratified sampling
+- **Cross-Validation:** 5-fold CV, stratified by target class
+- **Optimization Metric:** Macro-F1 score
+
+</div>
+
+<div style="font-size: 20px; font-weight: 700; color: #E74C3C; margin-top: 30px; margin-bottom: 15px;">Evaluation Metrics</div>
+
+<div style="margin-top: 10px;">
+
+- **Accuracy:** Overall correct predictions
+- **Macro-Precision:** Average precision across all modes (equal weight per class)
+- **Macro-Recall:** Average recall across all modes (equal weight per class)
+- **Macro-F1:** Harmonic mean of Macro-Precision and Macro-Recall
+
+</div>
+
+<div style="margin-top: 12px; font-size: 18px; background-color: #FDF3E7; padding: 10px; border-left: 5px solid #FF9800;">
+**Why Macro-averaging?** Equal weight to all modes, preventing 80%+ vehicle class dominance.
+</div>
+
+</div>
+## Model Implementation: Preprocessing Strategy
+
+<div style="font-size: 22px; line-height: 1.8;">
+
+<div style="margin-top: 20px;">
+
+- **Random Forest:** Native categorical handling (no encoding needed)
+
+- **XGBoost:** Mixed encoding for efficiency
+  - High cardinality (>50 levels): Target encoding
+  - Low cardinality (≤50 levels): One-hot encoding
+
+- **Decision Tree:** One-hot encoding (required for high-cardinality features)
+
+- **GLM-NET & SVM:** One-hot encoding + scaling (required for numeric operations)
+
+</div>
+
+<div style="margin-top: 12px; font-size: 18px; color: #27AE60; background-color: #E8F8F5; padding: 12px; border-left: 5px solid #27AE60;">
+**Data Leakage Prevention:** All encoders/scalers fitted within each CV fold (never on full data).
+</div>
+
+</div>
+## Model Implementation: Hyperparameter Optimization
+
+<div style="font-size: 22px; line-height: 1.8;">
+
+<div style="margin-top: 20px;">
 
 - **Random Forest:** Grid search (mtry, min_n, trees) with class weighting
+
 - **XGBoost:** Gradient boosting with Bayesian optimization (22 iterations)
+
 - **GLM-NET:** Elastic net regularization with Bayesian optimization
+
 - **SVM:** RBF kernel with Grid search (cost, gamma)
+
 - **Decision Tree:** Bayesian optimization (22 iterations) with complexity tuning
 
 </div>
 
-**Evaluation Strategy**
+<div style="margin-top: 30px; font-size: 20px; color: #2C3E50;">
 
-<div style="margin-top: 15px;">
-
-- **Macro-F1 Score:** Handles class imbalance by giving equal weight to all modes
-- **5-fold Cross-Validation:** Ensures robust performance estimates
-- **Stratified Sampling:** Maintains class distribution across folds
+**Optimization Approach:** All models use 5-fold cross-validation to find hyperparameters that maximize Macro-F1 score
 
 </div>
 
+<div style="margin-top: 12px; font-size: 18px; color: #27AE60; background-color: #E8F8F5; padding: 12px; border-left: 5px solid #27AE60;">
+**Data Leakage Prevention:** Class weights calculated within each CV fold (never on full training data).
 </div>
-## Model Performance Comparison
 
-```{r model-performance, fig.height=5, fig.width=10}
+</div>
+## Model Evaluation: Performance Comparison
+
+<div style="font-size: 14px; margin-bottom: 10px; color: #7F8C8D; font-style: italic;">
+Metric focus: Macro-F1 due to class imbalance (accuracy can be inflated).
+</div>
+
+```{r model-performance, fig.height=4.6, fig.width=10}
 # ACTUAL model performance results from optimization logs
 model_results <- data.frame(
   Model = c("Random Forest", "XGBoost", "GLM-NET", "SVM", "Decision Tree"),
-  Accuracy = c(0.9258, 0.9399, 0.9052, 0.7702, 0.8862),
-  `Macro-F1` = c(0.7153, 0.8476, 0.6225, 0.5031, 0.4311),
-  `Macro-Precision` = c(0.9410, 0.8718, 0.7297, 0.5762, 0.4462),
-  `Macro-Recall` = c(0.6147, 0.8527, 0.5890, 0.2438, 0.4266),
+  Accuracy = c(0.9258, 0.9357, 0.9052, 0.7702, 0.8862),
+  `Macro-F1` = c(0.7153, 0.8298, 0.6225, 0.5031, 0.4311),
+  `Macro-Precision` = c(0.9410, 0.8360, 0.7297, 0.5762, 0.4462),
+  `Macro-Recall` = c(0.6147, 0.8558, 0.5890, 0.2438, 0.4266),
   check.names = FALSE
 )
 
@@ -302,52 +354,22 @@ ggplot(model_metrics, aes(x = Metric, y = Score, fill = Model)) +
 ```
 
 <div style="font-size: 18px; margin-top: 5px;">
-<span style="color: #E74C3C; font-weight: 700; font-size: 18px;">Key Insight:</span> <span style="font-size: 18px;">XGBoost (orange) best overall balance; Random Forest (blue) highest precision</span>
+<span style="color: #E74C3C; font-weight: 700; font-size: 18px;">Key Insight:</span> <span style="font-size: 18px;">XGBoost (orange) best overall balance; Random Forest (blue) highest Macro-Precision</span>
 </div>
-## Model Details: XGBoost
+## Best Model Selected: XGBoost
 
-<div style="display: flex; font-size: 20px; line-height: 1.7; gap: 40px;">
+<div style="font-size: 22px; line-height: 1.8;">
 
-<div style="flex: 1;">
-<div style="font-size: 20px; font-weight: 700; color: #E74C3C; margin-bottom: 15px;">Optimized Hyperparameters</div>
+<div style="font-size: 20px; font-weight: 700; color: #E74C3C; margin-bottom: 15px;">Optimization</div>
 
-- **max_depth:** 15 (deep trees for complex patterns)
-- **eta (learning rate):** 0.30 (moderate speed)
-- **subsample:** 1.00 (use all data)
-- **colsample_bytree:** 1.00 (use all features)
-- **nrounds:** 100 (boosting iterations)
-</div>
+- **Hyperparameter tuning:** Bayesian optimization with 5-fold CV to maximize Macro-F1 (see Appendix for details)
 
-<div style="flex: 1;">
-<div style="font-size: 20px; font-weight: 700; color: #E74C3C; margin-bottom: 15px;">Key Findings</div>
+<div style="font-size: 20px; font-weight: 700; color: #E74C3C; margin-top: 25px; margin-bottom: 15px;">Key Findings</div>
 
-- **Balanced Performance:** High recall (0.85) and precision (0.87) across all modes
-- **Handles Rare Classes:** Successfully predicts minority modes despite 80%+ vehicle dominance
-- **Robust to Imbalance:** Macro-F1 of 0.85 confirms equal performance across classes
-- **Excellent Generalization:** Test F1 (0.85) exceeds CV F1 (0.77), showing strong real-world applicability
-- **Identifies Key Factors:** Distance (9.1%), speed (7.0%), and transit access (5.7%) are top predictors
-</div>
-
-</div>
-## Evaluation & Limitations
-
-<div style="font-size: 18px; line-height: 1.6;">
-
-**Performance Analysis**
-
-- **XGBoost achieves best balance:** F1=0.85, but Random Forest has higher precision (0.94 vs 0.87)
-- **Why Macro-F1?** Accuracy alone misleading - would achieve 80%+ by always predicting "vehicle"
-- **Strong generalization:** Test F1 (0.85) exceeds CV F1 (0.77) for XGBoost
-
-**Limitations**
-
-- **Insufficient data for rare modes:**
-  - Ferry: 79 trips (0.3%), Plane: 13 trips (0.1%), Other Bus: 8 trips (0.0%)
-  - Models struggle to learn patterns with so few samples
-
-- **Real-world deployment challenges:**
-  - Rare mode predictions may be unreliable in practice
-  - Focus on major modes (Vehicle, Walking, Bus, Train) for policy decisions
+- **Balanced performance:** Macro-Precision 0.84 & Macro-Recall 0.86 → Macro-F1 0.83
+- **Minority modes:** Remain challenging due to tiny sample sizes; balanced performance still best among models
+- **Generalization:** Test Macro-F1 0.83 > CV Macro-F1 0.76
+- **Top features:** Distance (9.1%), speed competitiveness (7.0%), station access (5.7%)
 
 </div>
 ## Conclusion
@@ -356,9 +378,13 @@ ggplot(model_metrics, aes(x = Metric, y = Score, fill = Model)) +
 
 **Key Takeaways:**
 
-- **Data quality is critical:** Removing vehicle proxies improved real-world applicability
-- **Class imbalance is manageable:** Proper techniques (weighting, Macro-F1) handle 80%+ majority class
-- **Model selection matters:** XGBoost outperformed other models for multi-class imbalanced data
+- **Imbalance is manageable:** Weighting + Macro-F1
+- **Modeling choice matters:** Boosting gave the best balanced performance
+- **Policy signal:** Distance, speed competitiveness, and station access drive mode choice
+
+<div style="margin-top: 12px; font-size: 18px; font-style: italic; color: #1A5276; background-color: #EBF5FB; padding: 12px; border-left: 5px solid #2E86C1;">
+These findings confirm that our model can predict travelers’ transport modes with reliable accuracy, supporting its use in transport planning and policy evaluation.
+</div>
 
 **Impact:** Feature importance reveals actionable patterns for targeted policy interventions:
 
@@ -369,21 +395,26 @@ ggplot(model_metrics, aes(x = Metric, y = Score, fill = Model)) +
 </div>
 
 </div>
-## Future Directions
+## Limitations & Future Directions
 
-<div style="font-size: 22px; line-height: 1.8;">
+<div style="font-size: 20px; line-height: 1.6;">
 
-**Next Steps for Deployment:**
+<div style="font-size: 22px; font-weight: 700; color: #E74C3C; margin-bottom: 12px;">Limitations</div>
 
-- **Geographic targeting:** Apply model to identify specific suburbs with high mode-shift potential
-- **Scenario analysis:** Test proposed interventions (e.g., faster buses, new routes) using model predictions
-- **Real-world partnership:** Collaborate with Gold Coast transport authority for implementation
+- **Insufficient data for rare modes:** Ferry (79 trips), Plane (13 trips), Other Bus (8 trips) - models struggle with <0.3% sample sizes
+- **Deployment focus:** Prioritize major modes (Vehicle, Walking, Bus, Train) for reliable policy decisions
 
-**Model Enhancements:**
+<div style="font-size: 22px; font-weight: 700; color: #E74C3C; margin-top: 20px; margin-bottom: 12px;">Future Directions</div>
 
-- Collect additional data for rare modes (ferry, plane, other bus) to improve predictions
-- Incorporate temporal patterns (seasonal, day-of-week, time-of-day variations)
-- Integrate real-time factors (traffic conditions, weather, service disruptions)
+*Next Steps for Deployment:*
+
+- **Geographic targeting:** Identify suburbs with high mode-shift potential
+- **Scenario analysis:** Test interventions (faster buses, new routes) using model predictions
+- **Real-world partnership:** Collaborate with Gold Coast transport authority
+
+*Model Enhancements:*
+
+- Collect more data for rare modes; incorporate temporal patterns; integrate real-time factors
 
 </div>
 ## Questions & Discussion {.flexbox .vcenter}
@@ -403,8 +434,8 @@ Any Questions?
 
 <div style="font-size: 18px;">
 
-**XGBoost (Best: Macro-F1 = 0.85)**
-- `max_depth`: 15, `eta`: 0.30, `subsample`: 1.00, `colsample_bytree`: 1.00
+**XGBoost (Best: Macro-F1 = 0.83)**
+- `max_depth`: 7, `eta`: 0.31, `subsample`: 1.00, `colsample_bytree`: 0.83, `min_child_weight`: 1.0, `gamma`: 0.00
 
 **Random Forest (Best: Macro-F1 = 0.72)**
 - `mtry`: 18, `min_n`: 2, `trees`: 600
