@@ -1,5 +1,16 @@
 /* Custom styling for ioslides presentation */
 
+/* Title slide - vertically centered */
+slides > slide.title-slide {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+slides > slide.title-slide hgroup {
+  width: 100%;
+}
+
 /* Slide titles */
 slides > slide.title-slide hgroup h1 {
   color: #2C3E50;

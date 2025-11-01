@@ -1,0 +1,744 @@
+---
+title: "Shared Preprocessing Pipeline"
+subtitle: "Creating Policy-Focused Dataset for All Team Models"
+author: "STAT5003 Group G07"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    code_folding: show
+    theme: cosmo
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# ==============================================================================
+# FILE PATHS - MODIFY THESE IF NEEDED
+# ==============================================================================
+INPUT_FILE <- "final_decoded_clean.csv"      # Week 7 baseline dataset
+OUTPUT_FILE <- "final_cleaned_policy_focused_1.csv"  # Policy-focused output
+```
+
+# 1. Introduction
+
+## Purpose
+
+This document describes the **shared preprocessing pipeline** that transforms the Week 7 baseline dataset into a policy-focused dataset suitable for all 5 team models.
+
+## File Paths
+
+**Input:** `data/interim/final_decoded_clean.csv`
+- Week 7 baseline dataset from teammate
+- Contains ~163 columns (including _imputed versions)
+- Has vehicle proxy variables that need removal
+
+**Output:** `data/processed/final_cleaned_policy_focused_1.csv`
+- Policy-focused dataset for all 5 models
+- Expected ~92 columns after variable removal
+- Ready for model-specific preprocessing
+
+## Why This Transformation?
+
+**Week 7 Instructor Feedback:**
+> "Consider removing variables that are direct proxies for the outcome (such as vehicle attributes) when you do your next assignment. Explore whether demographic and trip-related features provide interpretable insights into mode choice."
+
+**What We're Doing:**
+- ❌ Remove 81 variables that cause data leakage or provide no value
+- ➕ Add 9 new features (missing indicators + engineered features)
+- ✅ Keep demographic, trip, and household availability features
+- 🎯 Enable behavioral insights instead of trivial prediction
+
+**Net Result:** 163 columns → 92 columns
+
+## Who Uses This Output?
+
+**All 5 team members** will load `final_cleaned_policy_focused.csv` as the starting point for their respective models:
+- XGBoost (us)
+- Random Forest
+- Logistic Regression
+- Neural Network
+- SVM
+
+Each model then applies its own specific preprocessing (encoding, scaling, etc.).
+
+---
+
+# 2. Load Week 7 Dataset
+
+```{r load-data}
+# Load required libraries
+library(dplyr)
+library(tidyr)
+library(knitr)
+
+# Load Week 7 baseline dataset
+cat("Loading Week 7 dataset...\n")
+cat(sprintf("Input file: %s\n", INPUT_FILE))
+df <- read.csv(INPUT_FILE,
+               stringsAsFactors = FALSE,
+               na.strings = c("", "NA", "N/A", "NULL"))
+
+# Show dataset dimensions
+cat(sprintf("✓ Loaded: %d rows × %d columns\n", nrow(df), ncol(df)))
+
+# Preview first few rows
+head(df, 3)
+```
+
+```{r check-target}
+# Verify target variable exists
+target_col <- "STOP_MAINMODE"
+
+if (target_col %in% names(df)) {
+  cat("\n✓ Target variable found:", target_col, "\n")
+  cat("\nTarget distribution:\n")
+  print(table(df[[target_col]]))
+} else {
+  stop("❌ Target variable STOP_MAINMODE not found!")
+}
+```
+
+---
+
+# 3. Variable Removal - Category A: Trip-Specific Vehicle Proxies
+
+## Problem: Data Leakage
+
+These 15 variables are **only populated when the travel mode involves a vehicle**, creating perfect predictors that result in 100% accurate but trivial predictions.
+
+### Example of Data Leakage
+
+```{r show-leakage, eval=FALSE}
+# If VEH_VEHTYPE exists (e.g., "Sedan")
+# → Person definitely used a vehicle
+# → Model predicts "Vehicle Driver" with 100% confidence
+# → No behavioral learning, just detecting vehicle usage!
+```
+
+### Variables to Remove
+
+```{r vehicle-proxies}
+# A. Trip-Specific Vehicle Proxies (DATA LEAKAGE)
+# Note: Week 7 data has both original and _imputed versions - remove ALL
+vehicle_proxies <- c(
+  # Vehicle occupancy/identification (only for vehicle trips)
+  "STOP_VEHOCCUP", "STOP_VEHOCCUP_imputed",
+  "STOP_VEHONORANGEFORM", "STOP_VEHONORANGEFORM_imputed",
+  "STOP_VEHNUM", "STOP_VEHNUM_imputed",
+  "STOP_VEHPARKED",
+  "STOP_VEHWALKTIME", "STOP_VEHWALKTIME_imputed",
+
+  # Vehicle characteristics (only for vehicle users)
+  "VEH_VEHTYPE",
+  "VEH_VEHNO", "VEH_VEHNO_imputed",      # Vehicle number
+  "VEH_VEHYEAR", "VEH_VEHYEAR_imputed",
+  "VEH_VEHAGE", "VEH_VEHAGE_imputed",
+
+  # Fuel type (only for vehicle users)
+  "VEH_PETROL",
+  "VEH_DIESEL",
+  "VEH_GAS",
+  "VEH_ELECTRIC",
+  "VEH_HYBRID",
+
+  # Vehicle economics (only for vehicle users)
+  "VEH_RUNNINGCOST",
+  "VEH_HHWGT14", "VEH_HHWGT14_imputed",
+  "VEH_HHID"                              # Vehicle household ID
+)
+
+cat("Variables to remove (Category A - Vehicle Proxies):\n")
+cat(sprintf("Total: %d variables (including _imputed versions)\n\n", length(vehicle_proxies)))
+found_count <- 0
+for (i in seq_along(vehicle_proxies)) {
+  if (vehicle_proxies[i] %in% names(df)) {
+    cat(sprintf("  %2d. ✓ %s\n", i, vehicle_proxies[i]))
+    found_count <- found_count + 1
+  } else {
+    cat(sprintf("  %2d. ⚠ %s (not in dataset)\n", i, vehicle_proxies[i]))
+  }
+}
+cat(sprintf("\nFound %d/%d variables in dataset\n", found_count, length(vehicle_proxies)))
+```
+
+### What We Keep (Household Availability)
+
+**Important:** We **DO keep** household vehicle ownership variables because they represent **capability** (what modes are available), not usage:
+
+```{r keep-household}
+household_availability <- c(
+  "HH_CARS",        # Number of cars household owns
+  "HH_FOURWDS",     # Number of 4WDs
+  "HH_UTES",        # Number of utes
+  "HH_VANS",        # Number of vans
+  "HH_TRUCKS",      # Number of trucks
+  "HH_OTHERVEHS",   # Other vehicles
+  "HH_TOTALVEHS"    # Total vehicles
+)
+
+cat("\n✅ Household availability variables (KEPT):\n")
+for (var in household_availability) {
+  if (var %in% names(df)) {
+    cat(sprintf("  • %s\n", var))
+  }
+}
+
+cat("\n📊 Key distinction:\n")
+cat("  • VEH_VEHTYPE (REMOVED) = Person USED a vehicle this trip → 100% proxy\n")
+cat("  • HH_CARS (KEPT) = Household OWNS cars → Enables choice, doesn't dictate it\n")
+```
+
+---
+
+# 4. Variable Removal - Category B: Low-Value Variables
+
+## Problem: Minimal Variance
+
+These 2 variables have **94% of values identical** (`"N/A (some stops were made)"`), providing minimal predictive power.
+
+### Solution: Replace with Binary Indicators
+
+```{r low-value-vars}
+# Check actual distribution
+cat("Distribution of PERS_REASONCODE:\n")
+if ("PERS_REASONCODE" %in% names(df)) {
+  reasoncode_table <- table(df$PERS_REASONCODE)
+  print(reasoncode_table)
+  cat(sprintf("\nPercentage 'N/A': %.1f%%\n",
+              100 * reasoncode_table["N/A (some stops were made)"] / sum(reasoncode_table)))
+}
+
+cat("\nDistribution of PERS_MRTDOW:\n")
+if ("PERS_MRTDOW" %in% names(df)) {
+  mrtdow_table <- table(df$PERS_MRTDOW)
+  print(mrtdow_table)
+  cat(sprintf("\nPercentage 'N/A': %.1f%%\n",
+              100 * max(mrtdow_table) / sum(mrtdow_table)))
+}
+
+# Create binary missingness indicators
+cat("\n✓ Creating binary missingness indicators...\n")
+
+if ("PERS_ADDITIONALTRAVEL" %in% names(df)) {
+  df$PERS_ADDITIONALTRAVEL_missing <- as.integer(
+    df$PERS_ADDITIONALTRAVEL == "N/A (some stops were made)" | is.na(df$PERS_ADDITIONALTRAVEL)
+  )
+  cat("  • PERS_ADDITIONALTRAVEL_missing created\n")
+}
+
+if ("PERS_MRTDOW" %in% names(df)) {
+  df$PERS_MRTDOW_missing <- as.integer(
+    df$PERS_MRTDOW == "N/A (some stops were made)" | is.na(df$PERS_MRTDOW)
+  )
+  cat("  • PERS_MRTDOW_missing created\n")
+}
+
+# Variables to remove
+# Note: PERS_ADDITIONALTRAVEL is kept, only _missing indicator is added
+# PERS_REASONCODE and PERS_MRTDOW are removed entirely
+low_value_vars <- c(
+  "PERS_REASONCODE",   # 94% same value → removed entirely
+  "PERS_MRTDOW"        # 94% same value → removed, _missing indicator added
+)
+
+cat("\nVariables to remove (Category B):\n")
+cat("  • PERS_REASONCODE (94% 'N/A' - removed entirely)\n")
+cat("  • PERS_MRTDOW (94% 'N/A' - removed, but _missing indicator added)\n")
+cat("\nNote: PERS_ADDITIONALTRAVEL is kept, and _missing indicator is added\n")
+```
+
+---
+
+# 5. Variable Removal - Category C: Administrative Variables
+
+## Problem: Not Behavioral Predictors
+
+These 54 variables are survey metadata, redundant identifiers, raw timestamps, survey weights, and administrative fields that don't represent traveler behavior or characteristics useful for policy insights.
+
+```{r administrative-vars}
+# C. Administrative/Redundant Variables (54 variables)
+administrative_vars <- c(
+  # Survey administration metadata (6 vars)
+  "PERS_WHOFILLED",         # Who filled the survey - not predictive
+  "PERS_PROXY",             # Proxy respondent - not predictive
+  "PERS_FILLDOW",           # Day survey filled - not predictive
+  "PERS_FILLAG",            # Age of survey - not predictive
+  "PERS_FURTHERRESEARCH",   # Consent for research - not predictive
+  "PERS_NEWSTOP",           # Administrative flag
+
+  # Cycling-specific (8 vars, too granular)
+  "PERS_CYCLEDWORK",        # Cycled to work in past week
+  "PERS_CYCLEDSHOPPING",    # Cycled shopping in past week
+  "PERS_CYCLEDSCHOOL",      # Cycled to school in past week
+  "PERS_CYCLEDEXERCISE",    # Cycled for exercise in past week
+  "PERS_CYCLEDOTHER",       # Cycled other in past week
+  "PERS_NOCYCLED",          # Did not cycle in past week
+  "PERS_CYCLEDBIKEPARK",    # Access to bike parking - too specific
+  "PERS_CYCLEDSHOWERS",     # Access to showers - too specific
+
+  # Technology metadata (2 vars)
+  "PERS_ISSMARTPHONE",      # Has smartphone - weak predictor
+  "PERS_SMARTPHONEBRAND",   # Phone brand - not relevant
+
+  # ID columns (5 vars - survey identifiers only)
+  "STOPID",                 # Stop identifier
+  "PERSID",                 # Person identifier
+  "HHID",                   # Household identifier
+  "TRIPID",                 # Trip identifier
+  "VEHID",                  # Vehicle identifier
+
+  # Weight columns (5 vars - redundant with HH_HHWGT14)
+  "PERS_PERSWGT14",         # Person weight (redundant)
+  "STOP_STOPWGT14",         # Stop weight (redundant)
+  "STOP_STOPBASEWEIGHT",    # Stop base weight (redundant)
+  "TRIP_TRIPWGT14",         # Trip weight (redundant)
+  "TRIP_TRIPBASEWEIGHT",    # Trip base weight (redundant)
+
+  # Time columns (8 vars - raw timestamps not useful)
+  "STOP_ARRTIME",           # Arrival time (STOP_DEPHR captures pattern)
+  "STOP_DEPTIME",           # Departure time (STOP_DEPHR captures pattern)
+  "STOP_STARTTIME",         # Start time (STOP_STARTHR captures pattern)
+  "TRIP_ARRTIME",           # Trip arrival time (redundant)
+  "TRIP_DEPTIME",           # Trip departure time (redundant)
+  "TRIP_STARTIME",          # Trip start time (typo in original data)
+  "TRIP_ARRHR",             # Trip arrival hour (redundant)
+  "TRIP_STARTHR",           # Trip start hour (redundant)
+  "STOP_ARRHR",             # Stop arrival hour (redundant)
+
+  # Trip/Stop detail columns (8 vars - overly granular mode info)
+  "STOP_FULLMODE",          # Full mode description (STOP_MAINMODE sufficient)
+  "TRIP_LINKMODE",          # Linking mode between stops (too detailed)
+  "TRIP_MODE1",             # First mode used (too detailed)
+  "TRIP_TIMEMODE",          # Time spent in each mode (too detailed)
+  "TRIP_ENDSTOP",           # End stop number (positional info, not predictive)
+  "TRIP_STARTSTOP",         # Start stop number (positional info)
+  "STOP_STOPNO",            # Stop number (just ordering)
+  "TRIP_TRIPNO",            # Trip number (just ordering)
+
+  # Trip structure metadata (2 vars)
+  "TRIP_TRIPSTAGES",        # Internal trip structure - redundant
+  "TRIP_TOTTRIPTIME",       # Total trip time (TRIP_TRAVTIME sufficient)
+
+  # Household temporal metadata (3 vars)
+  "HH_TRAVDATE",            # Specific date - IS_WEEKEND captures pattern
+  "HH_TRAVMONTH",           # Month - not needed
+  "HH_TRAVYEAR",            # Year - all 2014 survey
+
+  # Redundant work variables (3 vars)
+  "PERS_FULLTIMEWORK",      # Full-time work (PERS_MAINACT captures this)
+  "PERS_PARTTIMEWORK",      # Part-time work (PERS_MAINACT captures this)
+  "PERS_ANYSTOPS",          # Any stops made (PERS_NUMSTOPS captures this)
+
+  # Other redundant variables (3 vars)
+  "STOP_MORESTOPS",         # More stops made (PERS_NUMSTOPS captures this)
+  "TRIP_TIME1"              # Duplicate of TRIP_TRAVTIME
+)
+
+cat("Variables to remove (Category C):\n")
+cat("\nSurvey administration (6 vars):\n")
+cat("  • PERS_WHOFILLED, PERS_PROXY, PERS_FILLDOW, PERS_FILLAG\n")
+cat("  • PERS_FURTHERRESEARCH, PERS_NEWSTOP\n")
+
+cat("\nCycling-specific (8 vars, too granular):\n")
+cat("  • PERS_CYCLEDWORK, PERS_CYCLEDSHOPPING, PERS_CYCLEDSCHOOL\n")
+cat("  • PERS_CYCLEDEXERCISE, PERS_CYCLEDOTHER, PERS_NOCYCLED\n")
+cat("  • PERS_CYCLEDBIKEPARK, PERS_CYCLEDSHOWERS\n")
+
+cat("\nTechnology metadata (2 vars):\n")
+cat("  • PERS_ISSMARTPHONE, PERS_SMARTPHONEBRAND\n")
+
+cat("\nID columns (5 vars):\n")
+cat("  • STOPID, PERSID, HHID, TRIPID, VEHID\n")
+
+cat("\nWeight columns (5 vars, redundant with HH_HHWGT14):\n")
+cat("  • PERS_PERSWGT14, STOP_STOPWGT14, STOP_STOPBASEWEIGHT\n")
+cat("  • TRIP_TRIPWGT14, TRIP_TRIPBASEWEIGHT\n")
+
+cat("\nTime columns (9 vars, raw timestamps):\n")
+cat("  • STOP_ARRTIME, STOP_DEPTIME, STOP_STARTTIME, STOP_ARRHR\n")
+cat("  • TRIP_ARRTIME, TRIP_DEPTIME, TRIP_STARTIME, TRIP_ARRHR, TRIP_STARTHR\n")
+
+cat("\nTrip/Stop details (8 vars, overly granular):\n")
+cat("  • STOP_FULLMODE, TRIP_LINKMODE, TRIP_MODE1, TRIP_TIMEMODE\n")
+cat("  • TRIP_ENDSTOP, TRIP_STARTSTOP, STOP_STOPNO, TRIP_TRIPNO\n")
+
+cat("\nTrip structure (2 vars):\n")
+cat("  • TRIP_TRIPSTAGES, TRIP_TOTTRIPTIME\n")
+
+cat("\nHousehold temporal (3 vars):\n")
+cat("  • HH_TRAVDATE, HH_TRAVMONTH, HH_TRAVYEAR\n")
+
+cat("\nRedundant variables (6 vars):\n")
+cat("  • PERS_FULLTIMEWORK, PERS_PARTTIMEWORK, PERS_ANYSTOPS\n")
+cat("  • STOP_MORESTOPS, TRIP_TIME1\n")
+
+# Count how many actually exist in dataset
+admin_found <- sum(administrative_vars %in% names(df))
+cat(sprintf("\n✓ Found %d/%d administrative variables in dataset\n",
+            admin_found, length(administrative_vars)))
+```
+
+---
+
+# 6. Feature Engineering (BEFORE Removal)
+
+**Important:** We create engineered features BEFORE removing variables, because some features (like TRIP_SPEED) depend on variables we're about to remove (like TRIP_TOTTRIPTIME).
+
+```{r feature-engineering-early}
+cat("=== FEATURE ENGINEERING (BEFORE REMOVAL) ===\n\n")
+
+# Vehicle availability features (per capita metrics - NOT trip-specific)
+cat("1. Creating vehicle availability features...\n")
+df <- df %>%
+  mutate(
+    VEH_PER_PERSON = if ("HH_TOTALVEHS" %in% names(.) && "HH_HHSIZE" %in% names(.)) {
+      ifelse(HH_HHSIZE > 0, HH_TOTALVEHS / HH_HHSIZE, 0)
+    } else 0,
+
+    VEH_PER_ADULT = if ("HH_CARS" %in% names(.) && "HH_HHSIZE" %in% names(.)) {
+      ifelse(HH_HHSIZE > 0, HH_CARS / HH_HHSIZE, 0)
+    } else 0
+  )
+cat("   ✓ VEH_PER_PERSON (vehicles per household member)\n")
+cat("   ✓ VEH_PER_ADULT (cars per adult)\n\n")
+
+# Trip characteristics (uses TRIP_TOTTRIPTIME which will be removed later)
+cat("2. Creating trip characteristic features...\n")
+df <- df %>%
+  mutate(
+    TRIP_SPEED = if ("TRIP_NETWORK_DIST" %in% names(.) && "TRIP_TOTTRIPTIME" %in% names(.)) {
+      ifelse(TRIP_TOTTRIPTIME > 0, TRIP_NETWORK_DIST / (TRIP_TOTTRIPTIME / 60), 0)
+    } else 0
+  )
+
+# Cap unrealistic speeds at 99th percentile or 150 km/h
+if ("TRIP_SPEED" %in% names(df)) {
+  speed_cap <- min(quantile(df$TRIP_SPEED, 0.99, na.rm = TRUE), 150)
+  n_capped <- sum(df$TRIP_SPEED > speed_cap, na.rm = TRUE)
+  if (n_capped > 0) {
+    df$TRIP_SPEED[df$TRIP_SPEED > speed_cap] <- speed_cap
+    cat(sprintf("   ✓ TRIP_SPEED (capped at %.1f km/h for %d values)\n", speed_cap, n_capped))
+  } else {
+    cat("   ✓ TRIP_SPEED (average trip speed in km/h)\n")
+  }
+}
+cat("\n")
+
+# Temporal features
+cat("3. Creating temporal features...\n")
+df <- df %>%
+  mutate(
+    TIME_PERIOD = if ("STOP_STARTHR" %in% names(.)) {
+      case_when(
+        STOP_STARTHR >= 6 & STOP_STARTHR < 9 ~ "Morning_Peak",
+        STOP_STARTHR >= 9 & STOP_STARTHR < 16 ~ "Midday",
+        STOP_STARTHR >= 16 & STOP_STARTHR < 19 ~ "Evening_Peak",
+        STOP_STARTHR >= 19 | STOP_STARTHR < 6 ~ "Off_Peak",
+        TRUE ~ "Unknown"
+      )
+    } else "Unknown",
+
+    IS_WEEKEND = if ("HH_TRAVDOW" %in% names(.)) {
+      as.integer(HH_TRAVDOW %in% c("Saturday", "Sunday"))
+    } else 0
+  )
+cat("   ✓ TIME_PERIOD (Morning_Peak/Midday/Evening_Peak/Off_Peak)\n")
+cat("   ✓ IS_WEEKEND (binary indicator)\n\n")
+
+# Distance categories
+cat("4. Creating distance categories...\n")
+df <- df %>%
+  mutate(
+    DIST_CATEGORY = if ("TRIP_NETWORK_DIST" %in% names(.)) {
+      case_when(
+        TRIP_NETWORK_DIST < 2 ~ "Very_Short",
+        TRIP_NETWORK_DIST < 5 ~ "Short",
+        TRIP_NETWORK_DIST < 15 ~ "Medium",
+        TRIP_NETWORK_DIST < 30 ~ "Long",
+        TRUE ~ "Very_Long"
+      )
+    } else "Unknown"
+  )
+cat("   ✓ DIST_CATEGORY (Very_Short/Short/Medium/Long/Very_Long)\n\n")
+
+# Interaction features
+cat("5. Creating interaction features...\n")
+if ("PERS_CARLICENCE" %in% names(df) && "HH_CARS" %in% names(df)) {
+  df <- df %>%
+    mutate(HAS_LICENSE_AND_CAR = as.integer(PERS_CARLICENCE == "Yes" & HH_CARS > 0))
+  cat("   ✓ HAS_LICENSE_AND_CAR (has license AND household has car)\n")
+}
+
+# Handle any Inf/NaN from calculations
+df <- df %>%
+  mutate(across(where(is.numeric), ~replace(., is.infinite(.) | is.nan(.), 0)))
+
+cat("\n=== FEATURE ENGINEERING COMPLETE ===\n")
+cat(sprintf("Dataset now has %d columns (before removal)\n", ncol(df)))
+```
+
+---
+
+# 7. Perform Variable Removal
+
+```{r remove-variables}
+# Combine all variables to remove
+vars_to_remove <- c(vehicle_proxies, low_value_vars, administrative_vars)
+
+# Check which exist in current dataset
+vars_found <- vars_to_remove[vars_to_remove %in% names(df)]
+vars_not_found <- vars_to_remove[!vars_to_remove %in% names(df)]
+
+cat("=== VARIABLE REMOVAL SUMMARY ===\n\n")
+cat(sprintf("Total variables to remove: %d\n", length(vars_to_remove)))
+cat(sprintf("  • Found in dataset: %d\n", length(vars_found)))
+cat(sprintf("  • Not found (already removed): %d\n", length(vars_not_found)))
+
+if (length(vars_not_found) > 0) {
+  cat("\nVariables not found in dataset:\n")
+  for (var in vars_not_found) {
+    cat(sprintf("  ⚠ %s\n", var))
+  }
+}
+
+# Perform removal
+cat("\nPerforming removal...\n")
+df_clean <- df %>%
+  select(-any_of(vars_found))
+
+cat(sprintf("✓ Removed %d variables\n", length(vars_found)))
+cat(sprintf("✓ Dataset now has %d columns (was %d)\n",
+            ncol(df_clean), ncol(df)))
+```
+
+---
+
+# 8. Validation Checks
+
+## Verify Vehicle Proxies Removed
+
+```{r validate-removal}
+cat("=== VALIDATION CHECKS ===\n\n")
+
+# Check 1: Vehicle proxies removed
+cat("1. Checking vehicle proxies removed...\n")
+vehicle_cols_remaining <- grep("VEH_VEH|STOP_VEH", names(df_clean), value = TRUE)
+
+if (length(vehicle_cols_remaining) == 0) {
+  cat("   ✓ All trip-specific vehicle proxies removed!\n")
+} else {
+  cat("   ⚠ WARNING: Found remaining vehicle columns:\n")
+  for (col in vehicle_cols_remaining) {
+    cat(sprintf("     • %s\n", col))
+  }
+}
+```
+
+## Verify Household Availability Kept
+
+```{r validate-kept}
+# Check 2: Household availability kept
+cat("\n2. Checking household availability variables kept...\n")
+household_cols_found <- intersect(household_availability, names(df_clean))
+
+cat(sprintf("   ✓ Found %d/%d household availability variables:\n",
+            length(household_cols_found), length(household_availability)))
+for (col in household_cols_found) {
+  cat(sprintf("     • %s\n", col))
+}
+```
+
+## Verify Dimensions
+
+```{r validate-dimensions}
+# Check 3: Dimensions
+cat("\n3. Checking dimensions...\n")
+cat(sprintf("   Rows: %d (unchanged: %s)\n",
+            nrow(df_clean),
+            ifelse(nrow(df_clean) == nrow(df), "✓", "⚠")))
+cat(sprintf("   Columns: %d → %d (removed %d)\n",
+            ncol(df), ncol(df_clean), ncol(df) - ncol(df_clean)))
+
+# Expected: ~92 columns (adjust based on actual Week 7 dataset)
+cat(sprintf("\n   Expected columns: ~92\n"))
+cat(sprintf("   Actual columns: %d %s\n",
+            ncol(df_clean),
+            ifelse(abs(ncol(df_clean) - 92) <= 5, "✓", "⚠")))
+```
+
+## Check for Missing Values
+
+```{r validate-missing}
+# Check 4: Missing values
+cat("\n4. Checking missing values...\n")
+missing_counts <- colSums(is.na(df_clean))
+cols_with_missing <- names(missing_counts[missing_counts > 0])
+
+cat(sprintf("   Columns with missing values: %d/%d\n",
+            length(cols_with_missing), ncol(df_clean)))
+
+if (length(cols_with_missing) > 0) {
+  top_missing <- head(sort(missing_counts[missing_counts > 0], decreasing = TRUE), 10)
+  cat("\n   Top 10 columns with most missing:\n")
+  for (i in seq_along(top_missing)) {
+    cat(sprintf("     %2d. %s: %d (%.1f%%)\n",
+                i, names(top_missing)[i], top_missing[i],
+                100 * top_missing[i] / nrow(df_clean)))
+  }
+}
+```
+
+---
+
+# 9. Save Policy-Focused Dataset
+
+```{r save-output}
+# Create output directory if needed
+output_dir <- "data/processed"
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
+  cat("✓ Created directory:", output_dir, "\n")
+}
+
+# Save policy-focused dataset
+cat(sprintf("\nOutput file: %s\n", OUTPUT_FILE))
+write.csv(df_clean, OUTPUT_FILE, row.names = FALSE)
+
+cat(sprintf("\n✓ Saved policy-focused dataset to:\n"))
+cat(sprintf("   %s\n", OUTPUT_FILE))
+cat(sprintf("\n   Dimensions: %d rows × %d columns\n",
+            nrow(df_clean), ncol(df_clean)))
+```
+
+---
+
+# 10. Before/After Summary
+
+```{r summary-table}
+# Create comparison summary
+summary_df <- data.frame(
+  Aspect = c(
+    "Rows",
+    "Columns",
+    "Vehicle Proxies",
+    "Household Availability",
+    "Low-Value Variables",
+    "Administrative Variables",
+    "Data Leakage",
+    "Primary Use Case"
+  ),
+  Before_Week7 = c(
+    format(nrow(df), big.mark = ","),
+    ncol(df),
+    "25 variables",
+    "✓ Present",
+    "2 vars (94% same value)",
+    "54 variables",
+    "Yes (VEH_VEHTYPE, etc.)",
+    "Technical prediction"
+  ),
+  After_PolicyFocused = c(
+    format(nrow(df_clean), big.mark = ","),
+    ncol(df_clean),
+    "0 (all removed)",
+    "✓ Kept (HH_CARS, etc.)",
+    "Removed + 2 indicators added",
+    "0 (all removed)",
+    "No + 7 engineered features",
+    "Policy insights"
+  )
+)
+
+kable(summary_df,
+      col.names = c("Aspect", "Before (Week 7)", "After (Policy-Focused)"),
+      caption = "Before/After Comparison")
+```
+
+## Key Changes Summary
+
+```{r final-summary}
+cat("\n=== PREPROCESSING COMPLETE ===\n\n")
+cat("📊 Summary of Changes:\n")
+cat(sprintf("  • Removed %d variables total:\n", length(vars_found)))
+cat(sprintf("    - %d trip-specific vehicle proxies (data leakage)\n",
+            sum(vehicle_proxies %in% vars_found)))
+cat(sprintf("    - %d low-value variables (replaced with indicators)\n",
+            sum(low_value_vars %in% vars_found)))
+cat(sprintf("    - %d administrative variables (survey metadata)\n",
+            sum(administrative_vars %in% vars_found)))
+cat(sprintf("\n  • Kept %d policy-relevant variables:\n", ncol(df_clean)))
+cat("    - Demographics (PERS_AGEGROUP, PERS_SEX, PERS_PERSINC, etc.)\n")
+cat("    - Trip characteristics (distance, time, purpose, etc.)\n")
+cat("    - Household availability (HH_CARS, HH_TOTALVEHS, etc.)\n")
+cat("\n✅ Output ready for all 5 team models!\n")
+cat(sprintf("\n📁 Location: %s\n", output_file))
+```
+
+---
+
+# Appendix: Variable Lists
+
+## Complete List of Removed Variables
+
+```{r appendix-removed}
+cat("=== REMOVED VARIABLES (by category) ===\n\n")
+
+cat("A. Trip-Specific Vehicle Proxies (25 vars with _imputed):\n")
+for (i in seq_along(vehicle_proxies)) {
+  cat(sprintf("  %2d. %s\n", i, vehicle_proxies[i]))
+}
+
+cat("\nB. Low-Value Variables (2 vars):\n")
+cat("  1. PERS_REASONCODE → Removed entirely\n")
+cat("  2. PERS_MRTDOW → Removed, but PERS_MRTDOW_missing added\n")
+
+cat("\nC. Administrative Variables (54 vars):\n")
+for (i in seq_along(administrative_vars)) {
+  cat(sprintf("  %2d. %s\n", i, administrative_vars[i]))
+}
+
+cat("\n=== ADDED FEATURES ===\n\n")
+cat("D. Engineered Features (7 vars):\n")
+cat("  1. VEH_PER_PERSON\n")
+cat("  2. VEH_PER_ADULT\n")
+cat("  3. TRIP_SPEED\n")
+cat("  4. TIME_PERIOD\n")
+cat("  5. IS_WEEKEND\n")
+cat("  6. DIST_CATEGORY\n")
+cat("  7. HAS_LICENSE_AND_CAR\n")
+
+cat("\nE. Missing Indicators (2 vars):\n")
+cat("  1. PERS_ADDITIONALTRAVEL_missing\n")
+cat("  2. PERS_MRTDOW_missing\n")
+```
+
+## Complete List of Kept Variables
+
+```{r appendix-kept}
+cat("\n=== KEPT VARIABLES ===\n")
+cat(sprintf("\nTotal: %d variables\n\n", ncol(df_clean)))
+
+# Group by prefix for better readability
+kept_vars <- sort(names(df_clean))
+
+cat("Target Variable:\n")
+cat(sprintf("  • %s\n", target_col))
+
+cat("\nFeature Variables:\n")
+feature_vars <- setdiff(kept_vars, target_col)
+for (i in seq_along(feature_vars)) {
+  cat(sprintf("  %2d. %s\n", i, feature_vars[i]))
+}
+```
+
+---
+
+**Document Created:** `r Sys.Date()`
+**Author:** STAT5003 Group G07
+**Purpose:** Shared preprocessing for all 5 team models
+**Input:** `data/interim/final_decoded_clean.csv`
+**Output:** `data/processed/final_cleaned_policy_focused_1.csv`

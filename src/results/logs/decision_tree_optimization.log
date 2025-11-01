@@ -1,0 +1,138 @@
+=== Decision Tree Bayesian Optimization Progress ===
+Started: 2025-10-26 23:27:34
+
+[INFO] Bayesian optimization: 22 iterations (5 initial + 17 Bayesian)
+Optimizing: Macro F1 score via 5-fold CV
+
+
+[23:27:34] Starting Iteration  1/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8012 | Prec=0.1783 | Rec=0.1752 | MacroF1=0.1758
+  Params: cp=0.087804, maxdepth=29, minsplit=16, minbucket=5
+  Time: Iter=18.9s | Total=00:19 | ETA=06:42
+
+[23:27:53] Starting Iteration  2/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8404 | Prec=0.1865 | Rec=0.1997 | MacroF1=0.1925
+  Params: cp=0.032477, maxdepth=18, minsplit=42, minbucket=7
+  Time: Iter=21.0s | Total=00:40 | ETA=06:43
+
+[23:28:14] Starting Iteration  3/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8404 | Prec=0.1865 | Rec=0.1997 | MacroF1=0.1925
+  Params: cp=0.015275, maxdepth=23, minsplit=24, minbucket=8
+  Time: Iter=19.2s | Total=00:59 | ETA=06:18
+
+[23:28:34] Starting Iteration  4/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8012 | Prec=0.1783 | Rec=0.1752 | MacroF1=0.1758
+  Params: cp=0.057272, maxdepth=7, minsplit=28, minbucket=9
+  Time: Iter=18.1s | Total=01:18 | ETA=05:51
+
+[23:28:52] Starting Iteration  5/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8012 | Prec=0.1783 | Rec=0.1752 | MacroF1=0.1758
+  Params: cp=0.077338, maxdepth=14, minsplit=49, minbucket=16
+  Time: Iter=19.9s | Total=01:38 | ETA=05:33
+
+[23:29:15] Starting Iteration  6/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8616 | Prec=0.3122 | Rec=0.3265 | MacroF1=0.3148
+  Params: cp=0.004375, maxdepth=5, minsplit=50, minbucket=5
+  Time: Iter=17.7s | Total=01:58 | ETA=05:16
+
+[23:29:34] Starting Iteration  7/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8708 | Prec=0.3382 | Rec=0.3603 | MacroF1=0.3443
+  Params: cp=0.000100, maxdepth=5, minsplit=50, minbucket=16
+  Time: Iter=19.4s | Total=02:19 | ETA=04:59
+
+[23:29:56] Starting Iteration  8/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8716 | Prec=0.3406 | Rec=0.3604 | MacroF1=0.3451
+  Params: cp=0.000100, maxdepth=5, minsplit=10, minbucket=3
+  Time: Iter=19.9s | Total=02:42 | ETA=04:43
+
+[23:30:19] Starting Iteration  9/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8898 | Prec=0.5545 | Rec=0.5033 | MacroF1=0.5108
+  Params: cp=0.000100, maxdepth=10, minsplit=31, minbucket=10
+  Time: Iter=23.4s | Total=03:08 | ETA=04:32
+
+[23:30:48] Starting Iteration 10/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8959 | Prec=0.6241 | Rec=0.5456 | MacroF1=0.5702
+  Params: cp=0.000100, maxdepth=13, minsplit=10, minbucket=3
+  Time: Iter=26.5s | Total=03:40 | ETA=04:24
+
+[23:31:19] Starting Iteration 11/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8858 | Prec=0.5097 | Rec=0.4405 | MacroF1=0.4551
+  Params: cp=0.000100, maxdepth=15, minsplit=50, minbucket=16
+  Time: Iter=26.1s | Total=04:11 | ETA=04:11
+
+[23:31:50] Starting Iteration 12/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8959 | Prec=0.6241 | Rec=0.5456 | MacroF1=0.5702
+  Params: cp=0.000100, maxdepth=13, minsplit=10, minbucket=3
+  Time: Iter=25.3s | Total=04:41 | ETA=03:54
+
+[23:32:19] Starting Iteration 13/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8547 | Prec=0.2883 | Rec=0.3013 | MacroF1=0.2936
+  Params: cp=0.008123, maxdepth=12, minsplit=10, minbucket=3
+  Time: Iter=22.1s | Total=05:07 | ETA=03:33
+
+[23:32:44] Starting Iteration 14/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8800 | Prec=0.4352 | Rec=0.3954 | MacroF1=0.4107
+  Params: cp=0.002823, maxdepth=13, minsplit=10, minbucket=3
+  Time: Iter=23.6s | Total=05:33 | ETA=03:10
+
+[23:33:29] Starting Iteration 15/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8224 | Prec=0.1875 | Rec=0.1901 | MacroF1=0.1864
+  Params: cp=0.048417, maxdepth=19, minsplit=35, minbucket=7
+  Time: Iter=19.0s | Total=06:13 | ETA=02:54
+
+[23:33:54] Starting Iteration 16/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8975 | Prec=0.6050 | Rec=0.5058 | MacroF1=0.5283
+  Params: cp=0.000770, maxdepth=12, minsplit=10, minbucket=3
+  Time: Iter=24.5s | Total=06:44 | ETA=02:31
+
+[23:34:25] Starting Iteration 17/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8929 | Prec=0.6247 | Rec=0.5595 | MacroF1=0.5813
+  Params: cp=0.000100, maxdepth=17, minsplit=10, minbucket=3
+  Time: Iter=28.4s | Total=07:19 | ETA=02:09
+
+[23:34:59] Starting Iteration 18/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8926 | Prec=0.5820 | Rec=0.5235 | MacroF1=0.5368
+  Params: cp=0.000100, maxdepth=15, minsplit=23, minbucket=7
+  Time: Iter=26.4s | Total=07:51 | ETA=01:44
+
+[23:35:31] Starting Iteration 19/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8922 | Prec=0.6271 | Rec=0.5668 | MacroF1=0.5865
+  Params: cp=0.000100, maxdepth=23, minsplit=10, minbucket=3
+  Time: Iter=30.6s | Total=08:27 | ETA=01:20
+
+[23:36:07] Starting Iteration 20/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8923 | Prec=0.6275 | Rec=0.5669 | MacroF1=0.5866
+  Params: cp=0.000100, maxdepth=22, minsplit=10, minbucket=3
+  Time: Iter=31.7s | Total=09:04 | ETA=00:54
+
+[23:36:43] Starting Iteration 21/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8921 | Prec=0.6271 | Rec=0.5668 | MacroF1=0.5864
+  Params: cp=0.000100, maxdepth=30, minsplit=10, minbucket=3
+  Time: Iter=31.3s | Total=09:40 | ETA=00:27
+
+[23:37:19] Starting Iteration 22/22 (5 init + 17 Bayes)...
+  5-Fold CV: Acc=0.8800 | Prec=0.4352 | Rec=0.3954 | MacroF1=0.4107
+  Params: cp=0.002883, maxdepth=30, minsplit=10, minbucket=3
+  Time: Iter=23.5s | Total=10:08 | ETA=00:00
+
+=== OPTIMIZATION COMPLETE ===
+Best iteration: 20/22
+Best Macro F1: 0.5866
+Best params: cp=0.000100, maxdepth=22, minsplit=10, minbucket=25
+Optimization time: 608.4 sec
+
+=== TEST SET PERFORMANCE ===
+Test Accuracy: 0.8862
+Test Precision (Macro): 0.4462
+Test Recall (Macro): 0.4266
+Test Macro F1: 0.4311
+
+[23:37:49] Complete! Total time: 616.4 sec (10.3 min)
+
+=== TEST SET PERFORMANCE ===
+Test Accuracy: 0.8862
+Test Precision (Macro): 0.4462
+Test Recall (Macro): 0.4266
+Test Macro F1: 0.4311
+
+[04:52:18] Complete! Total time: 1.0 sec (0.0 min)

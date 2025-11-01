@@ -1,0 +1,40 @@
+=== SVM Grid Search Progress ===
+Started: 2025-11-02 04:35:12
+
+[INFO] Parallel cluster: 31 cores
+[INFO] Grid search: 12 combinations
+[INFO] Hyperparameters: cost, gamma
+[INFO] Optimizing: Macro F1 score via 5-fold CV
+
+[04:35:12] Starting grid search...
+
+[04:41:48] Grid search complete
+
+=== OPTIMIZATION COMPLETE ===
+Best CV Macro F1: 0.2742
+Best params: cost=4.00, gamma=0.050000
+Grid search time: 396.1 sec (6.6 min)
+
+=== TEST SET PERFORMANCE ===
+Test Accuracy: 0.7702
+Test Precision (Macro): 0.5762
+Test Recall (Macro): 0.2438
+Test Macro F1: 0.5031
+
+[04:44:48] Complete! Total time: 580.1 sec (9.7 min)
+
+=== TEST SET PERFORMANCE ===
+Test Accuracy: 0.7702
+Test Precision (Macro): 0.5762
+Test Recall (Macro): 0.2438
+Test Macro F1: 0.5031
+
+[04:49:29] Complete! Total time: 3.7 sec (0.1 min)
+
+=== TEST SET PERFORMANCE ===
+Test Accuracy: 0.7702
+Test Precision (Macro): 0.5762
+Test Recall (Macro): 0.2438
+Test Macro F1: 0.5031
+
+[04:52:17] Complete! Total time: 3.7 sec (0.1 min)

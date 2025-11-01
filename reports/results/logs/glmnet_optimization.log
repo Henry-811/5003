@@ -1,0 +1,124 @@
+=== GLM-NET Bayesian Optimization Progress ===
+Started: 2025-11-02 03:55:54
+
+[INFO] Optimized Bayesian optimization: 16 iterations (5 initial + 11 Bayesian)
+[INFO] maxit reduced to 10,000 (20× faster convergence)
+[INFO] Optimizing: Macro F1 score via 5-fold CV
+
+[NOTE] Warning about rare classes (<8 obs in fold) is expected with 13-class imbalanced data
+
+
+[03:55:54] Starting Bayesian optimization (16 iterations)...
+[NOTE] Penalty range [1e-5, 1e-2] prevents over-regularization and class collapse
+
+[04:06:42] Iteration  1/16 (initial)
+  5-Fold CV: Acc=0.8993 | MacroF1=0.7274
+  Params: penalty=0.000010, mixture=0.25
+  Time: Total=10:47 | ETA=161:54
+
+[04:06:42] Iteration  2/16 (initial)
+  5-Fold CV: Acc=0.8973 | MacroF1=0.6816
+  Params: penalty=0.000056, mixture=0.75
+  Time: Total=10:47 | ETA=75:33
+
+[04:06:42] Iteration  3/16 (initial)
+  5-Fold CV: Acc=0.8813 | MacroF1=0.6905
+  Params: penalty=0.000316, mixture=0.00
+  Time: Total=10:47 | ETA=46:46
+
+[04:06:42] Iteration  4/16 (initial)
+  5-Fold CV: Acc=0.8824 | MacroF1=0.7252
+  Params: penalty=0.001778, mixture=1.00
+  Time: Total=10:47 | ETA=32:22
+
+[04:06:42] Iteration  5/16 (initial)
+  5-Fold CV: Acc=0.8834 | MacroF1=0.7714
+  Params: penalty=0.010000, mixture=0.50
+  Time: Total=10:47 | ETA=23:44
+
+[04:07:54] Iteration  6/16 (Bayesian)
+  5-Fold CV: Acc=0.8824 | MacroF1=0.7275
+  Params: penalty=0.000015, mixture=1.00
+  Time: Iter=72.1s | Total=11:59 | ETA=19:59
+
+[04:10:39] Iteration  7/16 (Bayesian)
+  5-Fold CV: Acc=0.8968 | MacroF1=0.7012
+  Params: penalty=0.002077, mixture=0.30
+  Time: Iter=165.0s | Total=14:44 | ETA=18:57
+
+[04:13:40] Iteration  8/16 (Bayesian)
+  5-Fold CV: Acc=0.8994 | MacroF1=0.7205
+  Params: penalty=0.000334, mixture=0.21
+  Time: Iter=181.4s | Total=17:46 | ETA=17:46
+
+[04:16:09] Iteration  9/16 (Bayesian)
+  5-Fold CV: Acc=0.8914 | MacroF1=0.6691
+  Params: penalty=0.005667, mixture=0.23
+  Time: Iter=149.1s | Total=20:15 | ETA=15:45
+
+[04:19:03] Iteration 10/16 (Bayesian)
+  5-Fold CV: Acc=0.8993 | MacroF1=0.7242
+  Params: penalty=0.000653, mixture=0.19
+  Time: Iter=173.6s | Total=23:08 | ETA=13:53
+
+[04:21:33] Iteration 11/16 (Bayesian)
+  5-Fold CV: Acc=0.8991 | MacroF1=0.7263
+  Params: penalty=0.000098, mixture=0.26
+  Time: Iter=149.6s | Total=25:38 | ETA=11:39
+
+[04:24:22] Iteration 12/16 (Bayesian)
+  5-Fold CV: Acc=0.8942 | MacroF1=0.6834
+  Params: penalty=0.003308, mixture=0.26
+  Time: Iter=169.3s | Total=28:27 | ETA=09:29
+
+[04:27:27] Iteration 13/16 (Bayesian)
+  5-Fold CV: Acc=0.8989 | MacroF1=0.7243
+  Params: penalty=0.000032, mixture=0.17
+  Time: Iter=185.5s | Total=31:33 | ETA=07:16
+
+[04:30:32] Iteration 14/16 (Bayesian)
+  5-Fold CV: Acc=0.8992 | MacroF1=0.7235
+  Params: penalty=0.000099, mixture=0.19
+  Time: Iter=184.2s | Total=34:37 | ETA=04:56
+
+[04:32:59] Iteration 15/16 (Bayesian)
+  5-Fold CV: Acc=0.8985 | MacroF1=0.7299
+  Params: penalty=0.000013, mixture=0.36
+  Time: Iter=147.7s | Total=37:05 | ETA=02:28
+
+[04:34:39] Iteration 16/16 (Bayesian)
+  5-Fold CV: Acc=0.8986 | MacroF1=0.6924
+  Params: penalty=0.000011, mixture=0.66
+  Time: Iter=99.6s | Total=38:44 | ETA=00:00
+
+[04:34:39] Completed Bayesian optimization
+
+=== OPTIMIZATION COMPLETE ===
+Best iteration: 5
+Best CV Macro F1: 0.7714
+Best params: penalty=0.010000, mixture=0.50
+Optimization time: 2324.8 sec (38.7 min)
+
+=== TEST SET PERFORMANCE ===
+Test Accuracy: 0.8875
+Test Precision (Macro): 0.5713
+Test Recall (Macro): 0.4822
+Test Macro F1: 0.5109
+
+[04:35:08] Complete! Total time: 2357.6 sec (39.3 min)
+
+=== TEST SET PERFORMANCE ===
+Test Accuracy: 0.8875
+Test Precision (Macro): 0.5713
+Test Recall (Macro): 0.4822
+Test Macro F1: 0.5109
+
+[04:49:25] Complete! Total time: 2.9 sec (0.0 min)
+
+=== TEST SET PERFORMANCE ===
+Test Accuracy: 0.8875
+Test Precision (Macro): 0.5713
+Test Recall (Macro): 0.4822
+Test Macro F1: 0.5109
+
+[04:52:13] Complete! Total time: 3.0 sec (0.1 min)

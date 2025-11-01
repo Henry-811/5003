@@ -1,0 +1,110 @@
+---
+title: "STAT5003 Peer Review"
+author: "Weiqi Luo"
+format: html
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<style>
+body {
+  text-align: justify;
+  text-justify: inter-word;
+}
+</style>
+
+
+## Review 1
+
+**Group ID:** W11_G09
+
+1. **What was done well in their presentation?**
+
+The group provided a focused, cohesive and data-centered presentation that clearly laid out the machine learning task and its applicability to reality. They started by choosing a primary factor: crash severity categories, from Fatal to Towaway, which provided the audience with a clear idea of what classification means in this context.
+
+Methodologically rigorous step-by-step data processing, including cleaning, missing value handling, and outliers reasoning were taken into account. The story then seamlessly moved to model comparison and performance analysis, noting that XGBoost performed best on macro-F1 (0.33) and ROC-AUC (0.69). In addition, this insight showed them that they were not just focusing on accuracy of a set of metrics but also the multi-class imbalance. Moreover, they turned their findings into actionable insights — mainly, that environmental factors (lighting, speed limit, distance) drove crash severity prediction, and that poor lighting combined with high-speed roads posed the highest risk factor. 
+
+The strong point of the presentation was its clarity and interpretation of analysis, thoughtful feature interpretation and the real-life policy link between prediction and prevention.
+
+2. **What is one thing that could be improved?**
+
+Although this analysis was thorough, it could have done more to address class imbalance and interpretability limitations more directly. The group themselves commented: “Most predictions fall into Moderate Injury,” indicating a conservative bias toward the largest sample class. This suggests a solution based on rebalancing methods (such as SMOTE or class weighting) to make the model more fair in those relatively uncommon but crucial categories like Fatal or Serious crashes. They also recognized “environmental features” as critical; however, details of why these features are statistically or behaviourally important (for example, through feature importance visualization or SHAP plots) could have added to the persuasiveness of the explanation. Last but not least, as they have already linked insights to prevention, a brief mention of data limitations (such as urban lighting data quality issues) might improve the transparency and reliability.
+
+
+3. **What did you learn about classification from this presentation?**
+
+From this presentation, I learned that classification in practice involves more than assigning labels, it requires managing imbalance, interpreting features, and translating outputs into real-world meaning. The group showed how performance metrics like macro-F1 and ROC-AUC reveal trade-offs between classes, which is vital when misclassifying severe outcomes could have serious policy implications.
+
+Equally, the link between data characteristics (environmental context) and model interpretability underscored that understanding domain factors is as critical as algorithmic tuning. The concluding slogan, “From Prediction → Prevention,” succinctly captured how classification models can inform preventive decision-making, such as improving lighting and infrastructure in high-speed zones.
+
+## Review 2
+
+**Group ID:** W11_G04
+
+1. **What was done well in their presentation?**
+
+The group delivered a well-structured and data-driven presentation that clearly articulated the machine learning workflow for classifying tree species from Sentinel-2 satellite data. They began by explaining the rationale behind feature engineering, using indices such as NDVI, EVI, and NDWI to represent vegetation characteristics like leaf color and water content. This demonstrated strong domain understanding and a thoughtful bridge between environmental science and data processing.
+
+Their modeling approach exploring multiple algorithms including Logistic Regression, Decision Tree, Random Forest, Adaboost, and XGBoost — and employing grid search with cross-validation to ensure fair comparison. The group also presented their evaluation results in a visually clear and comprehensible way, effectively summarizing model performance and parameter tuning outcomes. The entire presentation reflected methodological rigor, clear logic, and solid analytical reasoning.
+
+
+2. **What is one thing that could be improved?**
+
+While the presentation was comprehensive, it could be further improved by more explicitly addressing the imbalanced dataset issue. The class distribution appears uneven, which likely impacts classifier performance; introducing techniques such as class weighting or synthetic oversampling could provide a fairer evaluation.
+
+Furthermore, although the team provided a detailed description of feature construction, the presentation would have been better if it had explored the importance and interpretability of features more deeply. Visualization tools such as SHAP or feature importance plots could help explain how specific features (e.g., NDVI or NDRE) influence prediction results. Finally, summarizing key findings on a single slide would make the analysis more coherent for the audience.
+
+3. **What did you learn about classification from this presentation?**
+
+In this report I will describe that classification is not only dependent on choice of an algorithm, it also depends on meaningful feature representation and evaluation. I discovered that environmental indices can be used as powerful predictors to directly embed domain knowledge in numerical features. The report goes on to explain how cross-validation and comparative testing between the algorithms make sure results are valid and that models do not overfit to particular data patterns. Moreover, I discovered that implementing feature engineering, particularly a use of periodic features (such as seasonal patterns), enhances the learning capability of a model. 
+
+This report shows how appropriately architected datasets and quality indicators can produce interpretable and scientifically robust classification outcomes.
+
+## Review 3
+
+**Group ID:** W11_G05
+
+1. **What was done well in their presentation?**
+
+The group presented a coherent, data-driven workflow connecting satellite observations to real-world fire prediction. Their introduction explicitly established the problem, predicting fire size at first detection and linked it directly to operational considerations like triage and response efficiency. Moving from raw VIIRS data to aggregating at the event level demonstrated a strong understanding of methodology, specifically in the process of tackling duplicated detections through spatial DBSCAN clustering. 
+
+Their attention to first-detection attributes (brightness temperature, FRP, spatial bins) allowed to prevent data leakage and to obtain a valid predictive setup. This modeling section covered both breadth and depth, comparing KNN, XGBoost, Extra Trees, Linear Regression, and Random Forest, providing clear rationale for model choice and validation. Additionally, the presentation retained interpretability by linking model mechanics (i.e., the robustness and feature importance of Random Forest) to domain meaning.
+
+
+2. **What is one thing that could be improved?**
+
+While the presentation was comprehensive, it could benefit from greater emphasis on evaluation metrics and class balance. The slides described model architectures in detail but did not present comparative performance metrics (e.g., macro-F1, ROC-AUC, or confusion matrices) to quantify predictive success. Including these results would make the comparison more concrete and reveal whether the models favored certain fire-size classes over others.
+
+Additionally, the labeling thresholds for “small,” “medium,” and “large” fires were logically defined but might benefit from a short justification of their physical or policy relevance (e.g., why 20 MW FRP or 48-hour duration was chosen). A short error analysis could also highlight which misclassifications are most critical to response planning.
+
+3. **What did you learn about classification from this presentation?**
+
+This presentation deepened my understanding of how domain framing and feature design influence classification quality. I learned how defining the right target moment — predicting from first detection rather than full event data — avoids leakage and ensures realistic performance estimation. The group demonstrated how satellite-derived variables like FRP, brightness temperature, and spatial context can become informative predictors for early fire growth categorization.
+
+Moreover, I gained insight into the interplay between spatial data processing and classification modeling. Their aggregation from points to fire events showed that preparing the right data granularity is as crucial as choosing the algorithm. Finally, the presentation reinforced that real-world classification success depends on both predictive accuracy and interpretability, particularly when outcomes guide safety and resource allocation.
+
+## Review 4
+
+**Group ID:** W11_G08
+
+1. **What was done well in their presentation?**
+
+The team conducted a technically rigorous and methodologically sound analysis of Sydney's public transport demand classification. Their introduction clearly articulates the research objective to predict transport demand levels under different weather and time conditions and links this to tangible public outcomes such as optimized scheduling and service efficiency.
+
+The data integration and preprocessing phases are well-designed; notably, they merged Opal card passenger flow records with meteorological data into a unified 2-hour dataset. The classification process is also comprehensive: they tested a variety of algorithms, from linear baseline models such as logistic regression and LDA to nonlinear models such as SVM, KNN, and random forests, demonstrating a clear understanding of the behavior of different models.
+
+The report's most outstanding strength lies in the rigor and interpretability of its quantitative analysis. The performance results are clear and concise, particularly the excellent accuracy (0.95) and macro F1 score (0.92) of the random forest model. Visualizations such as confusion matrices and PCA scatter plots effectively reinforce their conclusions, showing that model evaluation goes beyond the original indicators and delves into the categorical level.
+
+2. **What is one thing that could be improved?**
+
+While the project is comprehensive, a deeper exploration of data imbalance and temporal generalization would be valuable. Results show that Support Vector Machines (SVM), Linear Discriminant Analysis (LDA), and Logistic Regression perform poorly when handling "high" and "extreme" demand levels, but the report does not discuss strategies to mitigate this imbalance. Future iterations could employ techniques such as resampling or class weight adjustment to improve recall for rare classes.
+
+Another area for improvement is model interpretability. While Random Forest performed best, the team could further clarify which variables (e.g., temperature, time, precipitation) influenced its predictions. Adding feature importance plots or SHAP explanations would make the model's decisions more transparent and policy-relevant. Finally, discussing potential extensions (e.g., temporal prediction or cross-seasonal validation) would enhance the project's practical value in transportation planning.
+
+3. **What did you learn about classification from this presentation?**
+
+This report highlights how classification models are applied to real-world operating systems, with data imbalance and temporal variability being key challenges. I learned how the team structured the classification problem into four ordered demand levels and applied linear and nonlinear algorithms to compare flexibility and interpretability.
+
+Particularly impressive was the effectiveness of the random forest model in handling the nonlinear relationship between weather and passenger demand compared to models assuming linear boundaries. The report also emphasizes the importance of feature ensembles, demonstrating that combining meteorological and behavioral data can significantly improve predictive capabilities. In conclusion, this analysis shows that effective classification requires not only algorithm selection but also carefully designed feature engineering and evaluation methods tailored to the domain context.

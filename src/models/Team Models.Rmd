@@ -59,10 +59,6 @@ plot(pressure)
 Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
 
 
-
-
-
-
 ##Random Forest
 
 ```{r, message=FALSE, warning=FALSE}
@@ -81,6 +77,13 @@ t_all_start_rf <- Sys.time()
 DATA_PATH <- "final_cleaned_policy_focused.csv"
 
 cat("\n=== Random Forest: Grid Search Optimization ===\n")
+
+# ========================================
+# SETUP (Always needed, before cache check)
+# ========================================
+# Log file setup
+log_file_rf <- "results/logs/random_forest_optimization.log"
+dir.create(dirname(log_file_rf), showWarnings = FALSE, recursive = TRUE)
 
 # ========================================
 # CACHE CHECK
@@ -171,9 +174,7 @@ if (!SKIP_TRAINING_RF) {
   # Define Macro F1 metric
   f_meas_macro <- metric_tweak("f_meas_macro", f_meas, estimator = "macro_weighted")
 
-  # Create optimization log
-  log_file_rf <- "results/logs/random_forest_optimization.log"
-  dir.create(dirname(log_file_rf), showWarnings = FALSE, recursive = TRUE)
+  # Write to optimization log
   cat("=== Random Forest Grid Search Progress ===\n", file = log_file_rf)
   cat(sprintf("Started: %s\n\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S")), file = log_file_rf, append = TRUE)
   cat(sprintf("[INFO] Grid search: %d combinations\n", length(mtry_vals) * length(minn_vals) * length(trees_vals)),
@@ -249,8 +250,7 @@ if (!SKIP_TRAINING_RF) {
   saveRDS(grid_res, cache_grid_rf)
   cat("[CACHE] Model saved to:", cache_model_rf, "\n")
 
-  # Close parallel
-  stopCluster(cl); registerDoSEQ()
+  # Parallel cluster will be closed at the end of the script
 }
 
 # ========================================
@@ -320,8 +320,11 @@ cat(sprintf("\n[%s] Complete! Total time: %.1f sec (%.1f min)\n",
 
 cat("\n[INFO] Total pipeline time:", round(total_time_rf, 2), "sec\n")
 
-# Close parallel
-stopCluster(cl); registerDoSEQ()
+# Close parallel (only if training was done)
+if (!SKIP_TRAINING_RF) {
+  stopCluster(cl)
+  registerDoSEQ()
+}
 ```
 
 
@@ -352,38 +355,15 @@ DATA_PATH_GLMNET <- "final_cleaned_policy_focused.csv"
 cat("\n=== GLM-NET: Sparse Matrix + Tidymodels Optimization ===\n")
 
 # ========================================
-# CACHE CHECK
+# SETUP LOG FILE (always, before cache check)
 # ========================================
-cache_model_glmnet <- "results/glmnet/trained_model.rds"
-cache_params_glmnet <- "results/glmnet/best_params.rds"
-cache_bayes_glmnet <- "results/glmnet/bayes_results.rds"
 
-if (!FORCE_RETRAIN && file.exists(cache_model_glmnet) && file.exists(cache_params_glmnet)) {
-  cat("[CACHE] Loading cached GLM-NET model...\n")
-  final_fit_glmnet <- readRDS(cache_model_glmnet)
-  best_params_glmnet <- readRDS(cache_params_glmnet)
-  if (file.exists(cache_bayes_glmnet)) {
-    bayes_rs_glmnet <- readRDS(cache_bayes_glmnet)
-  }
-  SKIP_TRAINING_GLMNET <- TRUE
-  cat("[CACHE] Loaded successfully. Skipping training.\n\n")
-} else {
-  if (FORCE_RETRAIN) {
-    cat("[INFO] FORCE_RETRAIN=TRUE: Retraining model\n")
-  } else {
-    cat("[INFO] No cache found. Running optimization\n")
-  }
-  cat("[INFO] Reduced maxit: 10,000 (20× faster than 200,000)\n")
-  cat("[INFO] Penalty range: [1e-5, 1e-2] (prevents over-regularization)\n")
-  cat("[INFO] Bayesian optimization: 16 iterations (5 initial + 11 Bayesian)\n")
-  SKIP_TRAINING_GLMNET <- FALSE
-}
+log_file_glmnet <- "results/logs/glmnet_optimization.log"
+dir.create(dirname(log_file_glmnet), showWarnings = FALSE, recursive = TRUE)
 
-cat("\n")
-
-if (!SKIP_TRAINING_GLMNET) {
-
-# ----Load and preprocess data----
+# ========================================
+# LOAD DATA (always, needed for evaluation)
+# ========================================
 
 dat_raw_glmnet <- read_csv(DATA_PATH_GLMNET, show_col_types = FALSE) %>%
   mutate(STOP_MAINMODE = as.factor(STOP_MAINMODE))
@@ -406,6 +386,47 @@ levels(dat_glmnet$STOP_MAINMODE) <- lv_new
 dat_glmnet <- dat_glmnet %>% filter(!is.na(STOP_MAINMODE))
 
 cat("[INFO] Classes:", length(levels(dat_glmnet$STOP_MAINMODE)), "\n")
+
+# ========================================
+# CACHE CHECK
+# ========================================
+cache_model_glmnet <- "results/glmnet/trained_model.rds"
+cache_params_glmnet <- "results/glmnet/best_params.rds"
+cache_bayes_glmnet <- "results/glmnet/bayes_results.rds"
+
+if (!FORCE_RETRAIN && file.exists(cache_model_glmnet) && file.exists(cache_params_glmnet)) {
+  cat("[CACHE] Loading cached GLM-NET model...\n")
+  final_fit_glmnet <- readRDS(cache_model_glmnet)
+  best_params_glmnet <- readRDS(cache_params_glmnet)
+  if (file.exists(cache_bayes_glmnet)) {
+    bayes_rs_glmnet <- readRDS(cache_bayes_glmnet)
+  }
+
+  # Create train/test split (needed for evaluation)
+  set.seed(5003)
+  data_split_glmnet <- initial_split(dat_glmnet, prop = 0.8, strata = STOP_MAINMODE)
+  train_dat_glmnet <- training(data_split_glmnet)
+  test_dat_glmnet <- testing(data_split_glmnet)
+
+  SKIP_TRAINING_GLMNET <- TRUE
+  cat("[CACHE] Loaded successfully. Skipping training.\n\n")
+} else {
+  if (FORCE_RETRAIN) {
+    cat("[INFO] FORCE_RETRAIN=TRUE: Retraining model\n")
+  } else {
+    cat("[INFO] No cache found. Running optimization\n")
+  }
+  cat("[INFO] Reduced maxit: 10,000 (20× faster than 200,000)\n")
+  cat("[INFO] Penalty range: [1e-5, 1e-2] (prevents over-regularization)\n")
+  cat("[INFO] Bayesian optimization: 16 iterations (5 initial + 11 Bayesian)\n")
+  SKIP_TRAINING_GLMNET <- FALSE
+}
+
+cat("\n")
+
+if (!SKIP_TRAINING_GLMNET) {
+
+# Data already loaded before cache check
 
 # ----Train/test split----
 
@@ -467,8 +488,7 @@ cat(sprintf("[INFO] Parallel cluster: %d cores\n", parallel::detectCores() - 1))
 
 # ----Bayesian optimization with custom logging----
 
-log_file_glmnet <- "results/logs/glmnet_optimization.log"
-dir.create(dirname(log_file_glmnet), showWarnings = FALSE, recursive = TRUE)
+# log_file_glmnet already defined before cache check
 cat("=== GLM-NET Bayesian Optimization Progress ===\n", file = log_file_glmnet)
 cat(sprintf("Started: %s\n\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S")), file = log_file_glmnet, append = TRUE)
 cat("[INFO] Optimized Bayesian optimization: 16 iterations (5 initial + 11 Bayesian)\n", file = log_file_glmnet, append = TRUE)
@@ -722,12 +742,16 @@ cat(sprintf("\n[%s] Complete! Total time: %.1f sec (%.1f min)\n",
             format(Sys.time(), "%H:%M:%S"), total_time_glmnet, total_time_glmnet/60),
     file = log_file_glmnet, append = TRUE)
 
-cat("\n[INFO] Optimization time:", round(as.numeric(difftime(t_train_end_glmnet, t_train_start_glmnet, units="secs")),2), "sec\n")
+if (!SKIP_TRAINING_GLMNET) {
+  cat("\n[INFO] Optimization time:", round(as.numeric(difftime(t_train_end_glmnet, t_train_start_glmnet, units="secs")),2), "sec\n")
+}
 cat("[INFO] Total pipeline time:", round(total_time_glmnet, 2), "sec\n")
 
-# Cleanup parallel cluster
-stopCluster(cl_glmnet)
-registerDoSEQ()
+# Cleanup parallel cluster (only if training was done)
+if (!SKIP_TRAINING_GLMNET) {
+  stopCluster(cl_glmnet)
+  registerDoSEQ()
+}
 
 ```
 
@@ -754,6 +778,12 @@ t_all_start_svm <- Sys.time()
 
 DATA_PATH_SVM <- "final_cleaned_policy_focused.csv"
 
+cat("\n=== SVM: Grid Search Optimization ===\n")
+
+# ----Setup log file (always, before cache check)----
+log_file_svm <- "results/logs/svm_optimization.log"
+dir.create(dirname(log_file_svm), showWarnings = FALSE, recursive = TRUE)
+
 # ----Cache check----
 
 cache_model_svm <- "results/svm/trained_model.rds"
@@ -771,9 +801,9 @@ if (!FORCE_RETRAIN && file.exists(cache_model_svm) && file.exists(cache_params_s
   best_gamma_svm <- best_params_list_svm$gamma
   best_f1_cv_svm <- best_params_list_svm$cv_f1
 
-  # Load scaling params
+  # Load scaled test data (evaluation needs X_test_svm_scaled)
   scaling_params_svm <- readRDS(cache_scaling_svm)
-  X_test_svm <- scaling_params_svm$X_test
+  X_test_svm_scaled <- scaling_params_svm$X_test
   y_test_svm <- scaling_params_svm$y_test
 
   cat(sprintf("[CACHE] Loaded: cost=%.2f, gamma=%.6f, CV Macro F1=%.4f\n",
@@ -877,6 +907,11 @@ cl_svm <- makeCluster(n_cores_svm)
 registerDoParallel(cl_svm)
 cat("[INFO] Parallel cluster registered with", n_cores_svm, "workers\n\n")
 
+# Write to log
+cat("=== SVM Grid Search Progress ===\n", file = log_file_svm)
+cat(sprintf("Started: %s\n\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S")), file = log_file_svm, append = TRUE)
+cat(sprintf("[INFO] Parallel cluster: %d cores\n", n_cores_svm), file = log_file_svm, append = TRUE)
+
 # ----Hyperparameter tuning (Parallel Grid Search with 5-fold CV)----
 
 set.seed(5003)
@@ -910,10 +945,17 @@ param_grid_svm <- expand.grid(cost = tune_grid_cost_svm, gamma = tune_grid_gamma
 cat("[INFO] Parallel SVM tuning with 5-fold CV, optimizing for Macro F1\n")
 cat(sprintf("[INFO] Grid search: %d combinations\n\n", nrow(param_grid_svm)))
 
+# Log grid search info
+cat(sprintf("[INFO] Grid search: %d combinations\n", nrow(param_grid_svm)), file = log_file_svm, append = TRUE)
+cat("[INFO] Hyperparameters: cost, gamma\n", file = log_file_svm, append = TRUE)
+cat("[INFO] Optimizing: Macro F1 score via 5-fold CV\n\n", file = log_file_svm, append = TRUE)
+
 # Create 5-fold CV indices
 set.seed(5003)
 n_folds_svm <- 5
 fold_indices_svm <- sample(rep(1:n_folds_svm, length.out = nrow(X_train_svm_unscaled)))
+
+cat(sprintf("[%s] Starting grid search...\n", format(Sys.time(), "%H:%M:%S")), file = log_file_svm, append = TRUE)
 
 # Parallel grid search
 t_train_start_svm <- Sys.time()
@@ -969,6 +1011,8 @@ t_train_end_svm <- Sys.time()
 elapsed_svm <- as.numeric(difftime(t_train_end_svm, t_train_start_svm, units = "secs"))
 cat(sprintf("\n[TIMING] Grid search completed in %.1f seconds\n\n", elapsed_svm))
 
+cat(sprintf("\n[%s] Grid search complete\n", format(Sys.time(), "%H:%M:%S")), file = log_file_svm, append = TRUE)
+
 # Best parameters
 best_idx_svm <- which.max(grid_results_svm$mean_macro_f1)
 best_cost_svm <- grid_results_svm$cost[best_idx_svm]
@@ -979,6 +1023,12 @@ cat("[Best params]\n")
 cat(sprintf("  cost:  %.2f\n", best_cost_svm))
 cat(sprintf("  gamma: %.6f\n", best_gamma_svm))
 cat(sprintf("  CV Macro F1: %.4f (±%.4f)\n\n", best_f1_cv_svm, grid_results_svm$sd_macro_f1[best_idx_svm]))
+
+# Log optimization results
+cat(sprintf("\n=== OPTIMIZATION COMPLETE ===\n"), file = log_file_svm, append = TRUE)
+cat(sprintf("Best CV Macro F1: %.4f\n", best_f1_cv_svm), file = log_file_svm, append = TRUE)
+cat(sprintf("Best params: cost=%.2f, gamma=%.6f\n", best_cost_svm, best_gamma_svm), file = log_file_svm, append = TRUE)
+cat(sprintf("Grid search time: %.1f sec (%.1f min)\n", elapsed_svm, elapsed_svm/60), file = log_file_svm, append = TRUE)
 
 # ----Train final model----
 
@@ -1070,13 +1120,28 @@ cat(sprintf("Macro Precision: %.4f\n", macro_precision_svm))
 cat(sprintf("Macro Recall   : %.4f\n", macro_recall_svm))
 cat(sprintf("Macro F1       : %.4f\n", macro_f1_svm))
 
-t_all_end_svm <- Sys.time()
-cat("\n[INFO] Training time:", round(elapsed_svm, 2), "sec\n")
-cat("[INFO] Total pipeline time:", round(as.numeric(difftime(t_all_end_svm, t_all_start_svm, units="secs")), 2), "sec\n")
+# Log test performance
+cat(sprintf("\n=== TEST SET PERFORMANCE ===\n"), file = log_file_svm, append = TRUE)
+cat(sprintf("Test Accuracy: %.4f\n", accuracy_svm), file = log_file_svm, append = TRUE)
+cat(sprintf("Test Precision (Macro): %.4f\n", macro_precision_svm), file = log_file_svm, append = TRUE)
+cat(sprintf("Test Recall (Macro): %.4f\n", macro_recall_svm), file = log_file_svm, append = TRUE)
+cat(sprintf("Test Macro F1: %.4f\n", macro_f1_svm), file = log_file_svm, append = TRUE)
 
-# Cleanup
-stopCluster(cl_svm)
-registerDoSEQ()
+t_all_end_svm <- Sys.time()
+total_time_svm <- as.numeric(difftime(t_all_end_svm, t_all_start_svm, units="secs"))
+
+cat("\n[INFO] Training time:", round(elapsed_svm, 2), "sec\n")
+cat("[INFO] Total pipeline time:", round(total_time_svm, 2), "sec\n")
+
+cat(sprintf("\n[%s] Complete! Total time: %.1f sec (%.1f min)\n",
+            format(Sys.time(), "%H:%M:%S"), total_time_svm, total_time_svm/60),
+    file = log_file_svm, append = TRUE)
+
+# Cleanup (only if training was done)
+if (!SKIP_TRAINING_SVM) {
+  stopCluster(cl_svm)
+  registerDoSEQ()
+}
 
 ```
 
@@ -1093,6 +1158,29 @@ invisible(lapply(libs, library, character.only = TRUE))
 set.seed(5003)  # Aligned seed for reproducibility
 
 t_all_start <- Sys.time()
+
+# ----Setup log file (always, before cache check)----
+
+log_file_dt <- "results/logs/decision_tree_optimization.log"
+dir.create(dirname(log_file_dt), showWarnings = FALSE, recursive = TRUE)
+
+# ----Load data (always, needed for evaluation)----
+
+data_path <- "final_cleaned_policy_focused.csv"
+df <- read.csv(data_path, stringsAsFactors = FALSE)
+cat("[INFO] Loaded:", nrow(df), "rows,", ncol(df), "columns\n")
+
+if ("STOPID" %in% names(df)) df$STOPID <- NULL
+stop_var <- "STOP_MAINMODE"
+if (!stop_var %in% names(df)) stop("STOP_MAINMODE not found")
+df[[stop_var]] <- as.factor(df[[stop_var]])
+
+char_cols <- names(df)[sapply(df, is.character)]
+char_cols <- setdiff(char_cols, stop_var)
+if (length(char_cols)) {
+  df[char_cols] <- lapply(df[char_cols], factor)
+  cat("[INFO] Converted to factor:", paste(char_cols, collapse=", "), "\n")
+}
 
 # ----Cache check----
 
@@ -1128,23 +1216,7 @@ cat("\n")
 
 if (!SKIP_TRAINING_DT) {
 
-# ----Load data----
-
-data_path <- "final_cleaned_policy_focused.csv"
-df <- read.csv(data_path, stringsAsFactors = FALSE)
-cat("[INFO] Loaded:", nrow(df), "rows,", ncol(df), "columns\n")
-
-if ("STOPID" %in% names(df)) df$STOPID <- NULL
-stop_var <- "STOP_MAINMODE"
-if (!stop_var %in% names(df)) stop("STOP_MAINMODE not found")
-df[[stop_var]] <- as.factor(df[[stop_var]])
-
-char_cols <- names(df)[sapply(df, is.character)]
-char_cols <- setdiff(char_cols, stop_var)
-if (length(char_cols)) {
-  df[char_cols] <- lapply(df[char_cols], factor)
-  cat("[INFO] Converted to factor:", paste(char_cols, collapse=", "), "\n")
-}
+# Data already loaded before cache check
 
 # ----Train/Test split----
 
@@ -1189,9 +1261,7 @@ library(ParBayesianOptimization)
 
 # Note: Using sequential CV for Decision Tree (faster than parallel due to low overhead)
 
-# Create optimization log file first
-log_file_dt <- "results/logs/decision_tree_optimization.log"
-dir.create(dirname(log_file_dt), showWarnings = FALSE, recursive = TRUE)
+# Write optimization log header (log_file_dt already defined before cache check)
 cat("=== Decision Tree Bayesian Optimization Progress ===\n", file = log_file_dt)
 cat(sprintf("Started: %s\n\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S")), file = log_file_dt, append = TRUE)
 cat("[INFO] Bayesian optimization: 22 iterations (5 initial + 17 Bayesian)\n", file = log_file_dt, append = TRUE)
@@ -1423,9 +1493,7 @@ cat(sprintf("\n[%s] Complete! Total time: %.1f sec (%.1f min)\n",
 
 cat("\n[INFO] Total pipeline time:", round(total_time_dt, 2), "sec\n")
 
-# Stop parallel cluster
-stopCluster(cl_dt)
-registerDoSEQ()
+# Note: Decision Tree uses sequential CV, no parallel cluster to stop
 
 ```
 
@@ -1442,6 +1510,28 @@ invisible(lapply(libs, library, character.only = TRUE))
 set.seed(5003)
 
 t_all_start <- Sys.time()
+
+# ----Setup log file (always, before cache check)----
+
+log_file_xgb <- "results/logs/xgboost_optimization.log"
+dir.create(dirname(log_file_xgb), showWarnings = FALSE, recursive = TRUE)
+
+# ----Load data (always, needed for evaluation)----
+
+data_path <- "final_cleaned_policy_focused.csv"
+df <- read.csv(data_path, stringsAsFactors = FALSE)
+cat("[INFO] Loaded:", nrow(df), "rows,", ncol(df), "columns\n")
+
+if ("STOPID" %in% names(df)) df$STOPID <- NULL
+stop_var <- "STOP_MAINMODE"
+if (!stop_var %in% names(df)) stop("STOP_MAINMODE not found")
+df[[stop_var]] <- as.factor(df[[stop_var]])
+
+char_cols <- names(df)[sapply(df, is.character)]
+char_cols <- setdiff(char_cols, stop_var)
+if (length(char_cols)) {
+  df[char_cols] <- lapply(df[char_cols], factor)
+}
 
 # ----Cache check----
 
@@ -1465,6 +1555,7 @@ if (!FORCE_RETRAIN && file.exists(cache_model_xgb) && file.exists(cache_params_x
   test_data_list_xgb <- readRDS(cache_test_data_xgb)
   X_test_final <- test_data_list_xgb$X_test
   y_test <- test_data_list_xgb$y_test
+  feature_names_encoded <- test_data_list_xgb$feature_names
 
   # Reconstruct DMatrix (can't serialize/deserialize DMatrix objects)
   dtest_final <- xgb.DMatrix(data = X_test_final, label = y_test)
@@ -1484,22 +1575,7 @@ cat("\n")
 
 if (!SKIP_TRAINING_XGB) {
 
-# ----Load data----
-
-data_path <- "final_cleaned_policy_focused.csv"
-df <- read.csv(data_path, stringsAsFactors = FALSE)
-cat("[INFO] Loaded:", nrow(df), "rows,", ncol(df), "columns\n")
-
-if ("STOPID" %in% names(df)) df$STOPID <- NULL
-stop_var <- "STOP_MAINMODE"
-if (!stop_var %in% names(df)) stop("STOP_MAINMODE not found")
-df[[stop_var]] <- as.factor(df[[stop_var]])
-
-char_cols <- names(df)[sapply(df, is.character)]
-char_cols <- setdiff(char_cols, stop_var)
-if (length(char_cols)) {
-  df[char_cols] <- lapply(df[char_cols], factor)
-}
+# Data already loaded before cache check
 
 # ----Train/Test split----
 
@@ -1634,9 +1710,7 @@ registerDoParallel(cl)
 # Note: XGBoost uses mlogloss for internal evaluation (fast, high variance)
 # Bayesian optimization uses Macro F1 as the optimization target (better for imbalanced classes)
 
-# Create optimization log
-log_file_xgb <- "results/logs/xgboost_optimization.log"
-dir.create(dirname(log_file_xgb), showWarnings = FALSE, recursive = TRUE)
+# Write optimization log header (log_file_xgb already defined before cache check)
 cat("=== Bayesian Optimization Progress Log ===\n", file = log_file_xgb)
 cat(sprintf("Started: %s\n\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S")), file = log_file_xgb, append = TRUE)
 cat("[INFO] Bayesian optimization: 22 iterations (7 initial + 15 Bayesian)\n", file = log_file_xgb, append = TRUE)
@@ -1938,7 +2012,8 @@ saveRDS(bayes_out, cache_bayes_xgb)
 # Note: Save raw matrices, not DMatrix (DMatrix can't be serialized)
 test_data_list_xgb <- list(
   X_test = X_test_final,
-  y_test = y_test
+  y_test = y_test,
+  feature_names = colnames(X_train_final)  # Save feature names for importance plot
 )
 saveRDS(test_data_list_xgb, cache_test_data_xgb)
 
@@ -1953,25 +2028,45 @@ cat("[CACHE] Test data saved to:", cache_test_data_xgb, "\n")
 
 cat("\n=== Extracting Feature Importance ===\n")
 
+# Get feature names (already loaded from cache at line 1510, or set here if trained fresh)
+if (!exists("feature_names_encoded")) {
+  feature_names_encoded <- colnames(X_train_final)
+}
+
 importance_matrix <- xgb.importance(
+  feature_names = feature_names_encoded,
   model = final_model
 )
 
 # Save CSV
 write.csv(importance_matrix, "results/xgboost/feature_importance.csv", row.names = FALSE)
 
-# Create plot
+# Create plot (top 20 features)
 top_features <- head(importance_matrix, 20)
 
 importance_plot <- ggplot(top_features, aes(x = reorder(Feature, Gain), y = Gain)) +
-  geom_col(fill = "#3498DB") +
+  geom_col(fill = "#2E86AB", alpha = 0.8) +
+  geom_text(aes(label = sprintf("%.1f%%", Gain * 100)),
+            hjust = -0.1, size = 3.5, color = "black") +
   coord_flip() +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)),
+                     labels = scales::percent_format()) +
   labs(title = "XGBoost Feature Importance (Top 20)",
-       x = "Feature",
-       y = "Gain") +
-  theme_minimal(base_size = 12)
+       subtitle = "Gain: Relative contribution to model predictions",
+       x = NULL,
+       y = "Importance (Gain)") +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray30"),
+    axis.text.y = element_text(size = 11),
+    axis.text.x = element_text(size = 10),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank()
+  )
 
-ggsave("results/xgboost/feature_importance.png", importance_plot, width = 10, height = 8)
+ggsave("results/xgboost/feature_importance.png", importance_plot,
+       width = 12, height = 10, dpi = 300, bg = "white")
 
 cat("Feature importance saved to results/xgboost/\n")
 cat("Top 5 features:\n")
@@ -2025,23 +2120,98 @@ cat(sprintf("Test Precision (Macro): %.4f\n", te["MacroPrecision"]))
 cat(sprintf("Test Recall (Macro): %.4f\n", te["MacroRecall"]))
 cat(sprintf("Test Macro F1: %.4f\n", te["MacroF1"]))
 
+# ----Confusion Matrix Visualization----
+
+# Use src/models/results/xgboost directory (where model is saved)
+output_dir <- "results/xgboost"
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Map numeric predictions back to original class names
+class_names <- sort(unique(df$STOP_MAINMODE))
+true_labels <- class_names[y_test + 1]
+pred_labels <- class_names[pred_class + 1]
+
+# Create confusion matrix
+conf_matrix <- table(Predicted = pred_labels, True = true_labels)
+
+# Convert to data frame for plotting
+conf_df <- as.data.frame(conf_matrix)
+names(conf_df) <- c("Predicted", "True", "Count")
+
+# Create heatmap with improved styling
+library(ggplot2)
+library(scales)
+
+# Determine text color based on background intensity
+conf_df$text_color <- ifelse(conf_df$Count > max(conf_df$Count) * 0.6, "white", "black")
+
+p <- ggplot(conf_df, aes(x = True, y = Predicted, fill = Count)) +
+  geom_tile(color = "white", size = 1.5) +
+  geom_text(aes(label = ifelse(Count > 0, Count, ""), color = I(text_color)),
+            size = 4, fontface = "bold") +
+  scale_fill_gradient2(
+    low = "#2166AC",
+    mid = "#F7F7F7",
+    high = "#B2182B",
+    midpoint = sqrt(max(conf_df$Count)) / 2,
+    trans = "sqrt",
+    name = "Count",
+    breaks = c(1, 10, 50, 100, 500, 1000, 2500),
+    guide = guide_colorbar(barwidth = 1.5, barheight = 15)
+  ) +
+  labs(x = "True Class",
+       y = "Predicted Class",
+       title = "XGBoost Confusion Matrix") +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 11, face = "bold"),
+    axis.text.y = element_text(size = 11, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16, margin = margin(b = 10)),
+    legend.position = "right",
+    legend.title = element_text(size = 11, face = "bold"),
+    legend.text = element_text(size = 10),
+    panel.grid = element_blank(),
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA)
+  )
+
+# Save plot
+confusion_matrix_path <- file.path(output_dir, "confusion_matrix.png")
+ggsave(confusion_matrix_path, p, width = 10, height = 8, dpi = 300, bg = "white")
+
+cat(sprintf("\n[INFO] Confusion matrix saved to: %s\n", confusion_matrix_path))
+
 t_all_end <- Sys.time()
 total_time_xgb <- as.numeric(difftime(t_all_end, t_all_start, units = "secs"))
-train_time_xgb <- as.numeric(difftime(t_train_end, t_train_start, units = "secs"))
 
-cat(sprintf("\n[%s] Complete! Total time: %.1f sec (%.1f min)\n",
-            format(Sys.time(), "%H:%M:%S"), total_time_xgb, total_time_xgb/60))
-cat(sprintf("Optimization time: %.1f sec (%.1f min)\n",
-            train_time_xgb, train_time_xgb/60),
-    file = log_file_xgb, append = TRUE)
+# Calculate training time (0 if loaded from cache)
+if (SKIP_TRAINING_XGB) {
+  train_time_xgb <- 0
+  cat(sprintf("\n[%s] Complete! Total time: %.1f sec (%.1f min)\n",
+              format(Sys.time(), "%H:%M:%S"), total_time_xgb, total_time_xgb/60))
+  cat(sprintf("Evaluation time: %.1f sec (%.1f min) [loaded from cache]\n",
+              total_time_xgb, total_time_xgb/60),
+      file = log_file_xgb, append = TRUE)
+} else {
+  train_time_xgb <- as.numeric(difftime(t_train_end, t_train_start, units = "secs"))
+  cat(sprintf("\n[%s] Complete! Total time: %.1f sec (%.1f min)\n",
+              format(Sys.time(), "%H:%M:%S"), total_time_xgb, total_time_xgb/60))
+  cat(sprintf("Optimization time: %.1f sec (%.1f min)\n",
+              train_time_xgb, train_time_xgb/60),
+      file = log_file_xgb, append = TRUE)
+  cat("\n[INFO] Training time:", round(train_time_xgb, 2), "sec\n")
+}
+
 cat(sprintf("\n[%s] Complete! Total time: %.1f sec (%.1f min)\n",
             format(Sys.time(), "%H:%M:%S"), total_time_xgb, total_time_xgb/60),
     file = log_file_xgb, append = TRUE)
 
-cat("\n[INFO] Training time:", round(train_time_xgb, 2), "sec\n")
 cat("[INFO] Total pipeline time:", round(total_time_xgb, 2), "sec\n")
 
-# Cleanup parallel cluster
-stopCluster(cl)
+# Cleanup parallel cluster (only if training was done)
+if (!SKIP_TRAINING_XGB) {
+  stopCluster(cl)
+}
 
 ```

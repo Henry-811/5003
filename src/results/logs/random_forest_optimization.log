@@ -1,0 +1,41 @@
+=== Random Forest Grid Search Progress ===
+Started: 2025-11-02 03:37:05
+
+[INFO] Grid search: 12 combinations
+[INFO] Hyperparameters: mtry, min_n, trees
+[INFO] Optimizing: Macro F1 score via 5-fold CV
+
+[INFO] Parallel cluster: 31 cores
+
+[03:37:08] Starting grid search...
+
+[03:38:31] Grid search complete
+
+=== OPTIMIZATION COMPLETE ===
+Best CV Macro F1: 0.9124
+Best params: mtry=18, min_n=2, trees=600
+Grid search time: 83.0 sec (1.4 min)
+
+=== TEST SET PERFORMANCE ===
+Test Accuracy: 0.9258
+Test Precision (Macro): 0.9410
+Test Recall (Macro): 0.6147
+Test Macro F1: 0.7153
+
+[03:38:40] Complete! Total time: 97.1 sec (1.6 min)
+
+=== TEST SET PERFORMANCE ===
+Test Accuracy: 0.9258
+Test Precision (Macro): 0.9410
+Test Recall (Macro): 0.6147
+Test Macro F1: 0.7153
+
+[04:49:22] Complete! Total time: 2.6 sec (0.0 min)
+
+=== TEST SET PERFORMANCE ===
+Test Accuracy: 0.9258
+Test Precision (Macro): 0.9410
+Test Recall (Macro): 0.6147
+Test Macro F1: 0.7153
+
+[04:52:10] Complete! Total time: 2.4 sec (0.0 min)
